@@ -24,7 +24,7 @@
     'data': [],
     'assets': {
         'point_of_sale._assets_pos': [
-            'xtendoo_scales/static/src/app/services/barcode_reader_service.js',
+            'la_casa_de_guadalupe_pos_scales/static/src/app/services/barcode_reader_service.js',
         ],
     },
     'images': ['static/description/icon.png'],
