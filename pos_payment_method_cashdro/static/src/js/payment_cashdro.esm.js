@@ -188,36 +188,57 @@ export class PaymentCashdro extends PaymentInterface {
         return url;
     }
 
+    /**
+     * Replaces fetch with XMLHttpRequest to avoid Odoo Service Worker 
+     * automatic protocol upgrades (HTTP -> HTTPS) and interception.
+     */
     async _cashdro_request(url) {
-        console.log("[Cashdro] Fetching URL directly from browser:", url);
-        const response = await browser.fetch(url);
-        if (!response.ok) {
-            console.error("[Cashdro] HTTP Error:", response.status, response.statusText);
-            throw new Error(`HTTP error! status: ${response.status}`);
-        }
-        const data = await response.json();
-        console.log("[Cashdro] Response data:", data);
-        return data;
+        console.log("[Cashdro] Requesting via XHR:", url);
+        return new Promise((resolve, reject) => {
+            const xhr = new XMLHttpRequest();
+            xhr.open("GET", url, true);
+            xhr.timeout = 15000;
+            
+            xhr.onload = function () {
+                console.log("[Cashdro] XHR Status:", xhr.status);
+                if (xhr.status >= 200 && xhr.status < 300) {
+                    try {
+                        const data = JSON.parse(xhr.responseText);
+                        console.log("[Cashdro] XHR Response data:", data);
+                        resolve(data);
+                    } catch (e) {
+                        console.log("[Cashdro] XHR raw response:", xhr.responseText);
+                        resolve({ data: xhr.responseText });
+                    }
+                } else {
+                    reject(new Error(`XHR error! status: ${xhr.status}`));
+                }
+            };
+            
+            xhr.onerror = function () {
+                console.error("[Cashdro] XHR Network Error");
+                reject(new Error("XHR Network Error (Protocol blocked or destination unreachable)"));
+            };
+            
+            xhr.ontimeout = function () {
+                console.error("[Cashdro] XHR Timeout");
+                reject(new Error("XHR Timeout"));
+            };
+            
+            xhr.send();
+        });
     }
 
     /**
-     * This is a special request, as we keep requesting the CashDro  until we get
-     * the *finished* state that will give us the amount received in the cashdrawer.
-     *
-     * @param {String} request_url
-     * @returns promise
+     * Special request loop using XHR to bypass Service Worker limits.
      */
     async _cashdro_request_payment(request_url) {
         let attempts = 0;
         while (true) {
             attempts++;
             try {
-                console.log(`[Cashdro] Polling attempt ${attempts} directly...`);
-                const response = await browser.fetch(request_url);
-                if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
-                }
-                const data_res = await response.json();
+                console.log(`[Cashdro] Polling attempt ${attempts} via XHR...`);
+                const data_res = await this._cashdro_request(request_url);
                 console.log(`[Cashdro] Poll response ${attempts}:`, data_res);
                 const data = JSON.parse(data_res.data);
                 if (data.operation.state === "F") {
@@ -226,10 +247,9 @@ export class PaymentCashdro extends PaymentInterface {
                 }
                 console.log(`[Cashdro] Operation state: ${data.operation.state}. Continuing poll...`);
             } catch (error) {
-                console.error("[Cashdro] Error in request payment loop:", error);
+                console.error("[Cashdro] Error in XHR poll loop:", error);
                 throw error;
             }
-            // Wait a bit before retrying to avoid hammering the terminal
             await new Promise((resolve) => setTimeout(resolve, 500));
         }
     }
