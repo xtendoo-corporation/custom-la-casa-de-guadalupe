@@ -1,6 +1,6 @@
 import requests
 import logging
-from odoo import fields, models, _
+from odoo import api, fields, models, _
 from odoo.exceptions import UserError
 
 _logger = logging.getLogger(__name__)
@@ -36,6 +36,12 @@ class PosPaymentMethod(models.Model):
         return super(
             PosPaymentMethod, self - cash_payment_types
         )._compute_hide_use_payment_terminal()
+
+    @api.model
+    def _load_pos_data_fields(self, config):
+        params = super()._load_pos_data_fields(config)
+        params += ["cashdro_host", "cashdro_user", "cashdro_password"]
+        return params
 
     def action_test_cashdro_connection(self):
         self.ensure_one()
