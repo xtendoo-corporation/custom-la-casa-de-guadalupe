@@ -189,55 +189,53 @@ export class PaymentCashdro extends PaymentInterface {
     }
 
     /**
-     * Replaces fetch with XMLHttpRequest to avoid Odoo Service Worker 
-     * automatic protocol upgrades (HTTP -> HTTPS) and interception.
+     * Re-implements fetch with Odoo 19 Private Network Access (PNA) 
+     * and Service Worker bypass.
      */
     async _cashdro_request(url) {
-        console.log("[Cashdro] Requesting via XHR:", url);
-        return new Promise((resolve, reject) => {
-            const xhr = new XMLHttpRequest();
-            xhr.open("GET", url, true);
-            xhr.timeout = 15000;
-            
-            xhr.onload = function () {
-                console.log("[Cashdro] XHR Status:", xhr.status);
-                if (xhr.status >= 200 && xhr.status < 300) {
-                    try {
-                        const data = JSON.parse(xhr.responseText);
-                        console.log("[Cashdro] XHR Response data:", data);
-                        resolve(data);
-                    } catch (e) {
-                        console.log("[Cashdro] XHR raw response:", xhr.responseText);
-                        resolve({ data: xhr.responseText });
-                    }
-                } else {
-                    reject(new Error(`XHR error! status: ${xhr.status}`));
-                }
-            };
-            
-            xhr.onerror = function () {
-                console.error("[Cashdro] XHR Network Error");
-                reject(new Error("XHR Network Error (Protocol blocked or destination unreachable)"));
-            };
-            
-            xhr.ontimeout = function () {
-                console.error("[Cashdro] XHR Timeout");
-                reject(new Error("XHR Timeout"));
-            };
-            
-            xhr.send();
-        });
+        // Add hw_proxy/hello to URL to make Odoo Service Worker ignore it.
+        // This avoids automatic protocol upgrades or interception failure.
+        const separator = url.includes("?") ? "&" : "?";
+        const finalUrl = `${url}${separator}hw_proxy/hello`;
+        
+        console.log("[Cashdro] Fetching with PNA and SW bypass:", finalUrl);
+        
+        try {
+            const response = await browser.fetch(finalUrl, {
+                method: "GET",
+                // targetAddressSpace: 'local' allows HTTPS -> HTTP on private IPs
+                // in Chromium-based browsers if permissions are granted.
+                targetAddressSpace: "local",
+            });
+
+            console.log("[Cashdro] response status:", response.status);
+            if (!response.ok) {
+                console.error("[Cashdro] HTTP Error:", response.status, response.statusText);
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+
+            const data = await response.json();
+            console.log("[Cashdro] Response data:", data);
+            return data;
+        } catch (error) {
+            console.error("[Cashdro] Fetch error:", error);
+            // If it still fails with TypeError, it's likely a protocol block
+            if (error instanceof TypeError && error.message.includes("fetch")) {
+                console.warn("[Cashdro] Protocol upgrade or CORS block detected even with PNA.");
+            }
+            throw error;
+        }
     }
 
     /**
-     * Special request loop using XHR to bypass Service Worker limits.
+     * Special request loop using the improved fetch with PNA.
      */
     async _cashdro_request_payment(request_url) {
         let attempts = 0;
         while (true) {
             attempts++;
             try {
-                console.log(`[Cashdro] Polling attempt ${attempts} via XHR...`);
+                console.log(`[Cashdro] Polling attempt ${attempts} with PNA...`);
                 const data_res = await this._cashdro_request(request_url);
                 console.log(`[Cashdro] Poll response ${attempts}:`, data_res);
                 const data = JSON.parse(data_res.data);
@@ -247,7 +245,7 @@ export class PaymentCashdro extends PaymentInterface {
                 }
                 console.log(`[Cashdro] Operation state: ${data.operation.state}. Continuing poll...`);
             } catch (error) {
-                console.error("[Cashdro] Error in XHR poll loop:", error);
+                console.error("[Cashdro] Error in PNA poll loop:", error);
                 throw error;
             }
             await new Promise((resolve) => setTimeout(resolve, 500));
