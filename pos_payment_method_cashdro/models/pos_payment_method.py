@@ -98,3 +98,21 @@ class PosPaymentMethod(models.Model):
                     "sticky": False,
                 },
             }
+
+    @api.model
+    def proxy_cashdro_request(self, url):
+        _logger.info("[Cashdro Proxy] Requesting URL: %s", url)
+        try:
+            response = requests.get(url, timeout=15)
+            _logger.info("[Cashdro Proxy] Status: %s", response.status_code)
+            # Try to parse as JSON, if not return text
+            try:
+                data = response.json()
+                _logger.info("[Cashdro Proxy] JSON Response: %s", data)
+                return data
+            except ValueError:
+                _logger.info("[Cashdro Proxy] Text Response: %s", response.text)
+                return {"data": response.text, "status_code": response.status_code}
+        except Exception as e:
+            _logger.error("[Cashdro Proxy] Error: %s", str(e))
+            return {"error": str(e)}

@@ -189,15 +189,18 @@ export class PaymentCashdro extends PaymentInterface {
     }
 
     async _cashdro_request(url) {
-        console.log("[Cashdro] Fetching URL:", url);
-        const response = await browser.fetch(url);
-        if (!response.ok) {
-            console.error("[Cashdro] HTTP Error:", response.status, response.statusText);
-            throw new Error(`HTTP error! status: ${response.status}`);
+        console.log("[Cashdro] Requesting through backend proxy:", url);
+        try {
+            const data = await this.pos.data.call("pos.payment.method", "proxy_cashdro_request", [url]);
+            console.log("[Cashdro] Proxy response data:", data);
+            if (data && data.error) {
+                throw new Error(`Proxy error: ${data.error}`);
+            }
+            return data;
+        } catch (error) {
+            console.error("[Cashdro] RPC Error during proxy request:", error);
+            throw error;
         }
-        const data = await response.json();
-        console.log("[Cashdro] Response data:", data);
-        return data;
     }
 
     /**
@@ -212,13 +215,15 @@ export class PaymentCashdro extends PaymentInterface {
         while (true) {
             attempts++;
             try {
-                console.log(`[Cashdro] Polling attempt ${attempts}...`);
-                const response = await browser.fetch(request_url);
-                if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
-                }
-                const data_res = await response.json();
+                console.log(`[Cashdro] Polling attempt ${attempts} via proxy...`);
+                const data_res = await this._cashdro_request(request_url);
                 console.log(`[Cashdro] Poll response ${attempts}:`, data_res);
+                
+                // If the proxy returns an object with 'error', it means the fetch failed
+                if (data_res.error) {
+                    throw new Error(data_res.error);
+                }
+
                 const data = JSON.parse(data_res.data);
                 if (data.operation.state === "F") {
                     console.log("[Cashdro] Operation finished!");
