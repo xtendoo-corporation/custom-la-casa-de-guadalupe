@@ -133,27 +133,27 @@ patch(BarcodeReader.prototype, {
                     console.log('[Xtendoo Scales] 🔢 Valor original recibido:', code);
                     console.log('[Xtendoo Scales] 🔢 Valor convertido (sin formato):', numericValue);
                     
-                    // Convertir a número y asegurar 3 decimales con último dígito par
+                    // Convertir a número y asegurar 2 decimales con último dígito par
                     let parsedValue = parseFloat(numericValue);
                     
-                    // Redondear a 3 decimales
-                    parsedValue = Math.round(parsedValue * 1000) / 1000;
+                    // Redondear a 2 decimales
+                    parsedValue = Math.round(parsedValue * 100) / 100;
                     
                     // Obtener el último dígito decimal
-                    const valueStr = parsedValue.toFixed(3);
+                    const valueStr = parsedValue.toFixed(2);
                     const lastDigit = parseInt(valueStr.charAt(valueStr.length - 1));
                     
                     // Si el último dígito es impar, incrementarlo al par más cercano mayor
                     if (lastDigit % 2 !== 0) {
-                        // Añadir 0.001 para pasar al siguiente número par
-                        parsedValue = parsedValue + 0.001;
+                        // Añadir 0.01 para pasar al siguiente número par
+                        parsedValue = parsedValue + 0.01;
                         console.log('[Xtendoo Scales] 🔄 Último dígito impar detectado (' + lastDigit + '), ajustando al par más cercano');
                     }
                     
-                    // Formatear a exactamente 3 decimales
-                    numericValue = parsedValue.toFixed(3);
+                    // Formatear a exactamente 2 decimales
+                    numericValue = parsedValue.toFixed(2);
                     
-                    console.log('[Xtendoo Scales] 🔢 Valor final con 3 decimales y último dígito par:', numericValue);
+                    console.log('[Xtendoo Scales] 🔢 Valor final con 2 decimales y último dígito par:', numericValue);
                     console.log('[Xtendoo Scales] 🔢 Tipo de dato:', typeof numericValue);
                     console.log('[Xtendoo Scales] 🔢 Longitud del string:', numericValue.length);
 
@@ -309,9 +309,9 @@ patch(BarcodeReader.prototype, {
                                                                 console.warn('%c[Xtendoo Scales] 🔧 SOLUCIÓN:', 'background: #3498DB; color: white; font-weight: bold; padding: 3px 6px;');
                                                                 console.warn('[Xtendoo Scales] 📍 Ir a: Inventario → Configuración → Unidades de Medida');
                                                                 console.warn('[Xtendoo Scales] 📍 Buscar la unidad: "Unidades" o "kg"');
-                                                                console.warn('[Xtendoo Scales] 📍 Campo "Precision de Redondeo" debe ser: 0.001');
-                                                                console.warn('[Xtendoo Scales] 📍 Actualmente podría ser: 0.01 (redondea a 2 decimales)');
-                                                                console.warn('[Xtendoo Scales] 📍 Con 0.001 permitirá 3 decimales sin aproximar');
+                                                                console.warn('[Xtendoo Scales] 📍 Campo "Precision de Redondeo" debe ser: 0.01');
+                                                                console.warn('[Xtendoo Scales] 📍 Actualmente podría ser: 0.1 (redondea a 1 decimal)');
+                                                                console.warn('[Xtendoo Scales] 📍 Con 0.01 permitirá 2 decimales sin aproximar');
                                                             } else if (displayedQty === expectedQty || Math.abs(displayedNum - expectedNum) <= 0.0001) {
                                                                 console.log('%c[Xtendoo Scales] ✅ PERFECTO: Cantidad establecida correctamente sin aproximación', 'background: #27AE60; color: white; font-weight: bold; padding: 3px 6px;');
                                                             }
