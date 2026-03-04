@@ -6,6 +6,18 @@ import { PaymentInterface } from "@point_of_sale/app/utils/payment/payment_inter
 import { _t } from "@web/core/l10n/translation";
 import { browser } from "@web/core/browser/browser";
 
+// ── Cashdro S connection tuning ──────────────────────────────────────────
+// The Cashdro Model S has a very limited embedded HTTP server (single thread).
+// When it's busy counting coins it cannot accept new TCP connections, causing
+// transient ConnectTimeoutError. These constants control the retry behaviour.
+const CASHDRO_REQUEST_MAX_RETRIES = 3; // retries per individual HTTP request
+const CASHDRO_REQUEST_INITIAL_DELAY = 2000; // ms before first retry (doubles each time)
+const CASHDRO_POLL_INITIAL_INTERVAL = 1000; // ms – first poll wait
+const CASHDRO_POLL_MAX_INTERVAL = 5000; // ms – cap for progressive poll wait
+const CASHDRO_POLL_INTERVAL_INCREMENT = 500; // ms added each successful poll cycle
+const CASHDRO_POLL_MAX_ERRORS = 5; // consecutive HTTP errors before aborting poll
+const CASHDRO_POLL_GLOBAL_TIMEOUT = 5 * 60 * 1000; // 5 min global timeout for polling
+
 export class PaymentCashdro extends PaymentInterface {
     /**
      * @override
@@ -82,7 +94,7 @@ export class PaymentCashdro extends PaymentInterface {
             const res_ack = await this._cashdro_request(ack_url);
             console.log("[Cashdro] acknowledgeOperationId response:", res_ack);
 
-            // Validate the operation
+            // Validate the operation (polling with tolerance)
             const ask_url = this._cashdro_ask_url(operation_id);
             console.log("[Cashdro] Starting polling for operation status...", ask_url);
             const operation_data = await this._cashdro_request_payment(ask_url);
@@ -100,7 +112,10 @@ export class PaymentCashdro extends PaymentInterface {
             payment_line.setPaymentStatus("retry");
             this.env.services.dialog.add(AlertDialog, {
                 title: _t("Error"),
-                body: _t("An error occurred while connecting to the cashdro: %s", error.message || error),
+                body: _t(
+                    "An error occurred while connecting to the cashdro: %s",
+                    error.message || error
+                ),
             });
             return false;
         }
@@ -123,7 +138,7 @@ export class PaymentCashdro extends PaymentInterface {
         }
     }
 
-    // API communication methods
+    // ── URL builders ─────────────────────────────────────────────────────
 
     _cashdro_url() {
         const order = this.pos.getOrder();
@@ -139,7 +154,9 @@ export class PaymentCashdro extends PaymentInterface {
         const method = selected_line.payment_method_id;
         const host = method && method.cashdro_host;
         if (!host) {
-            console.error("[Cashdro] Cashdro host is missing in payment method configuration");
+            console.error(
+                "[Cashdro] Cashdro host is missing in payment method configuration"
+            );
             return false;
         }
         let url = `${host}/Cashdro3WS/index.php`;
@@ -164,91 +181,150 @@ export class PaymentCashdro extends PaymentInterface {
     _cashdro_ack_url(operation_id) {
         const base_url = this._cashdro_url();
         if (!base_url) return "";
-        let url = base_url;
-        url += "&operation=acknowledgeOperationId";
-        url += "&operationId=" + operation_id;
-        return url;
+        return `${base_url}&operation=acknowledgeOperationId&operationId=${operation_id}`;
     }
 
     _cashdro_ask_url(operation_id) {
         const base_url = this._cashdro_url();
         if (!base_url) return "";
-        let url = base_url;
-        url += "&operation=askOperation";
-        url += "&operationId=" + operation_id;
-        return url;
+        return `${base_url}&operation=askOperation&operationId=${operation_id}`;
     }
 
     _cashdro_finish_url(operation_id) {
         const base_url = this._cashdro_url();
         if (!base_url) return "";
-        let url = base_url;
-        url += "&operation=finishOperation&type=2";
-        url += "&operationId=" + operation_id;
-        return url;
+        return `${base_url}&operation=finishOperation&type=2&operationId=${operation_id}`;
     }
 
+    // ── HTTP layer with retries & exponential backoff ────────────────────
+
     /**
-     * Re-implements fetch with Odoo 19 Private Network Access (PNA) 
-     * and Service Worker bypass.
+     * Perform a single fetch to the Cashdro device with PNA and SW bypass.
+     * Does NOT retry – that is handled by the caller.
+     * @param {string} url
+     * @returns {Promise<Response>}
      */
-    async _cashdro_request(url) {
-        // Add hw_proxy/hello to URL to make Odoo Service Worker ignore it.
-        // This avoids automatic protocol upgrades or interception failure.
+    async _cashdro_fetch(url) {
+        // Append hw_proxy/hello so Odoo's Service Worker ignores this request
         const separator = url.includes("?") ? "&" : "?";
         const finalUrl = `${url}${separator}hw_proxy/hello`;
-        
-        console.log("[Cashdro] Fetching with PNA and SW bypass:", finalUrl);
-        
-        try {
-            const response = await browser.fetch(finalUrl, {
-                method: "GET",
-                // targetAddressSpace: 'local' allows HTTPS -> HTTP on private IPs
-                // in Chromium-based browsers if permissions are granted.
-                targetAddressSpace: "local",
-            });
 
-            console.log("[Cashdro] response status:", response.status);
-            if (!response.ok) {
-                console.error("[Cashdro] HTTP Error:", response.status, response.statusText);
-                throw new Error(`HTTP error! status: ${response.status}`);
-            }
+        const response = await browser.fetch(finalUrl, {
+            method: "GET",
+            // targetAddressSpace: 'local' allows HTTPS → HTTP on private IPs
+            targetAddressSpace: "local",
+        });
 
-            const data = await response.json();
-            console.log("[Cashdro] Response data:", data);
-            return data;
-        } catch (error) {
-            console.error("[Cashdro] Fetch error:", error);
-            // If it still fails with TypeError, it's likely a protocol block
-            if (error instanceof TypeError && error.message.includes("fetch")) {
-                console.warn("[Cashdro] Protocol upgrade or CORS block detected even with PNA.");
-            }
-            throw error;
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
         }
+        return response.json();
     }
 
     /**
-     * Special request loop using the improved fetch with PNA.
+     * Send a request to the Cashdro with automatic retries and exponential
+     * backoff.  The Cashdro S often refuses TCP connections while it is busy;
+     * retrying after a short wait usually succeeds.
+     *
+     * @param {string} url
+     * @returns {Promise<Object>} parsed JSON response
+     */
+    async _cashdro_request(url) {
+        let lastError;
+        for (let attempt = 1; attempt <= CASHDRO_REQUEST_MAX_RETRIES; attempt++) {
+            try {
+                console.log(
+                    `[Cashdro] Request attempt ${attempt}/${CASHDRO_REQUEST_MAX_RETRIES}: ${url}`
+                );
+                const data = await this._cashdro_fetch(url);
+                console.log("[Cashdro] Response data:", data);
+                return data;
+            } catch (error) {
+                lastError = error;
+                console.warn(
+                    `[Cashdro] Attempt ${attempt} failed:`,
+                    error.message || error
+                );
+                if (attempt < CASHDRO_REQUEST_MAX_RETRIES) {
+                    const delay =
+                        CASHDRO_REQUEST_INITIAL_DELAY * Math.pow(2, attempt - 1);
+                    console.log(`[Cashdro] Waiting ${delay}ms before retry…`);
+                    await new Promise((r) => setTimeout(r, delay));
+                }
+            }
+        }
+        console.error(
+            `[Cashdro] All ${CASHDRO_REQUEST_MAX_RETRIES} attempts failed.`
+        );
+        throw lastError;
+    }
+
+    /**
+     * Poll the Cashdro for the operation result.  Tolerates transient network
+     * errors (up to CASHDRO_POLL_MAX_ERRORS consecutive) and uses a
+     * progressive interval that grows from CASHDRO_POLL_INITIAL_INTERVAL up to
+     * CASHDRO_POLL_MAX_INTERVAL.  A global timeout prevents infinite loops.
+     *
+     * @param {string} request_url
+     * @returns {Promise<Object>} final operation data
      */
     async _cashdro_request_payment(request_url) {
+        let pollInterval = CASHDRO_POLL_INITIAL_INTERVAL;
+        let consecutiveErrors = 0;
         let attempts = 0;
+        const startTime = Date.now();
+
         while (true) {
+            // Global timeout guard
+            if (Date.now() - startTime > CASHDRO_POLL_GLOBAL_TIMEOUT) {
+                throw new Error(
+                    `Cashdro operation timed out after ${
+                        CASHDRO_POLL_GLOBAL_TIMEOUT / 1000
+                    }s of polling.`
+                );
+            }
+
             attempts++;
             try {
-                console.log(`[Cashdro] Polling attempt ${attempts} with PNA...`);
-                const data_res = await this._cashdro_request(request_url);
+                console.log(
+                    `[Cashdro] Polling attempt ${attempts} (interval ${pollInterval}ms)…`
+                );
+                const data_res = await this._cashdro_fetch(request_url);
+                // Reset consecutive error counter on success
+                consecutiveErrors = 0;
                 console.log(`[Cashdro] Poll response ${attempts}:`, data_res);
+
                 const data = JSON.parse(data_res.data);
                 if (data.operation.state === "F") {
                     console.log("[Cashdro] Operation finished!");
                     return data_res;
                 }
-                console.log(`[Cashdro] Operation state: ${data.operation.state}. Continuing poll...`);
+                console.log(
+                    `[Cashdro] Operation state: ${data.operation.state}. Continuing poll…`
+                );
             } catch (error) {
-                console.error("[Cashdro] Error in PNA poll loop:", error);
-                throw error;
+                consecutiveErrors++;
+                console.warn(
+                    `[Cashdro] Poll error ${consecutiveErrors}/${CASHDRO_POLL_MAX_ERRORS}:`,
+                    error.message || error
+                );
+                if (consecutiveErrors >= CASHDRO_POLL_MAX_ERRORS) {
+                    console.error(
+                        `[Cashdro] ${CASHDRO_POLL_MAX_ERRORS} consecutive poll errors – aborting.`
+                    );
+                    throw new Error(
+                        `Cashdro unreachable after ${CASHDRO_POLL_MAX_ERRORS} consecutive ` +
+                            `poll failures. Last error: ${error.message || error}`
+                    );
+                }
             }
-            await new Promise((resolve) => setTimeout(resolve, 500));
+
+            // Progressive wait: grows each cycle, capped at max
+            await new Promise((r) => setTimeout(r, pollInterval));
+            pollInterval = Math.min(
+                pollInterval + CASHDRO_POLL_INTERVAL_INCREMENT,
+                CASHDRO_POLL_MAX_INTERVAL
+            );
         }
     }
 }
