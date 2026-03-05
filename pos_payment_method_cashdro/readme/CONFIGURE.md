@@ -1,43 +1,47 @@
-To add a Cashdro payment terminal:
+Para añadir un terminal de pago Cashdro:
 
-1.  Go to _Point of Sale \> Configuration \> Payment Methods_
-2.  Choose a cash payment method or create a new one.
-3.  Select _Cashdro_ in the _Use a Payment Terminal_ field.
-4.  Configure the Cashdro terminal hostname and credentials.
-5.  Configure the desired, Cashdro terminal in the proper PoS configurations.
+1. Ve a **Punto de Venta > Configuración > Métodos de Pago**
+2. Elige un método de pago en efectivo o crea uno nuevo.
+3. Selecciona **Cashdro** en el campo **Usar un Terminal de Pago**.
+4. Configura el hostname/IP del terminal Cashdro y sus credenciales (nombre de usuario y
+   contraseña).
+5. Configura el terminal Cashdro deseado en la configuración del Punto de Venta
+   correspondiente.
 
-Note that if a single payment method was used for cash in different stores, it should be
-splitted in as many physical stores there are.
+Ten en cuenta que si se utilizaba un único método de pago en efectivo para diferentes
+tiendas, deberá dividirse en tantos métodos de pago como tiendas físicas existan.
 
-## Network Requirements (Odoo Cloud to Local CashDro)
+## Requisitos de Red (Odoo Cloud a CashDro Local)
 
-When Odoo is hosted in the Cloud and the CashDro device is located in the store's local
-network (LAN, e.g., `192.168.1.x`), a secure tunnel or VPN **must be established**.
-Otherwise, Odoo will fail to connect due to timeouts.
+Cuando Odoo está alojado en la Nube y el dispositivo CashDro se encuentra en la red
+local de la tienda física (LAN, ej. `192.168.1.x`), **se debe establecer** un túnel
+seguro o VPN. De lo contrario, Odoo no podrá conectarse y generará errores de "timeout".
 
-We recommend using **Tailscale** for a quick Subnet Routing setup:
+Recomendamos usar **Tailscale** para configurar rápidamente el Enrutamiento de Subred
+(Subnet Routing):
 
-1. Install Tailscale on the Odoo Cloud server
+1. Instala Tailscale en el servidor Cloud de Odoo
    (`curl -fsSL https://tailscale.com/install.sh | sh`).
-2. Install Tailscale on the Windows POS PC in the physical store.
-3. On the Windows POS PC, open **CMD or PowerShell as Administrator** and advertise the
-   store's local subnet: `tailscale up --advertise-routes=192.168.1.0/24` _(change to
-   your actual subnet)_.
-4. On the Tailscale web admin console, go to the Windows Machine settings and
-   **Approve** the subnet route.
-5. In Odoo Payment Method configuration, keep the actual LAN IP of the CashDro (e.g.
-   `192.168.1.50`). The Odoo server will now successfully reach it through the Tailscale
-   tunnel.
+2. Instala Tailscale en el PC TPV con Windows de la tienda física.
+3. En el PC Windows, abre **Símbolo del sistema (CMD) o PowerShell como Administrador**
+   y anuncia la subred local de la tienda:
+   `tailscale up --advertise-routes=192.168.1.0/24` _(cámbialo por tu subred real)_.
+4. En la consola de administración web de Tailscale, ve a la configuración de Máquinas y
+   **Aprueba (Approve)** la ruta de la subred en el dispositivo Windows.
+5. En la configuración del Método de Pago de Odoo, mantén la IP LAN real del CashDro
+   (ej. `192.168.1.50`). A partir de ahora, el servidor Odoo podrá comunicarse sin
+   problemas a través del túnel Tailscale.
 
-### Note for Docker / Doodba Environments
+### Nota para Entornos Docker / Doodba
 
-If your Odoo is running inside a Docker container (like a **Doodba** environment),
-simply installing Tailscale on the Linux host is usually enough, **provided that IP
-forwarding is enabled** so the Docker containers can route traffic through the host's
-`tailscale0` interface to the store's subnet.
+Si tu Odoo se ejecuta dentro de un contenedor Docker (como un entorno **Doodba**),
+normalmente es suficiente con instalar Tailscale directamente en el Host (servidor Linux
+base), **siempre y cuando el reenvío de IP (IP forwarding) esté habilitado** para que
+los contenedores Docker puedan enrutar tráfico a través de la interfaz `tailscale0`
+hacia la subred de la tienda.
 
-Alternatively, you can run Tailscale as a sidecar container in your
-`docker-compose.yml`:
+Como alternativa (y recomendada), puedes ejecutar Tailscale como un contenedor "sidecar"
+dentro de tu `docker-compose.yml`:
 
 ```yaml
 services:
@@ -46,25 +50,27 @@ services:
     hostname: odoocloud-tailscale
     environment:
       - TS_AUTHKEY=tskey-auth-your-key-here
-      - TS_ROUTES=192.168.1.0/24 # Accept routes from the store
-    network_mode: "service:odoo" # Attach directly to Odoo's network namespace
+      - TS_ROUTES=192.168.1.0/24 # Acepta rutas desde la tienda
+    network_mode: "service:odoo" # Se conecta directamente al espacio de red de Odoo
     cap_add:
       - net_admin
       - sys_module
 ```
 
-If you use the sidecar approach with `network_mode: "service:odoo"`, the Odoo container
-will natively have access to the Tailscale network and the Cashdro IP.
+Al utilizar este enfoque de "sidecar" con `network_mode: "service:odoo"`, el contenedor
+de Odoo tendrá acceso nativo a la red de Tailscale y a la IP del Cashdro sin tocar las
+reglas del servidor Host.
 
-**Getting the TS_AUTHKEY for Docker deployments:** The `TS_AUTHKEY` allows the container
-to join your Tailscale network automatically on startup without requiring a manual
-login.
+**Cómo obtener la TS_AUTHKEY para despliegues con Docker:**
 
-1. Log into your Tailscale web console
+El valor `TS_AUTHKEY` permite que el contenedor se una a tu red de Tailscale
+automáticamente al arrancar, sin que tengas que iniciar sesión manualmente.
+
+1. Inicia sesión en tu consola web de Tailscale
    [`login.tailscale.com`](https://login.tailscale.com).
-2. Navigate to **Settings > Keys**.
-3. Click **Generate auth key**. We recommend creating a **Reusable** or **Ephemeral**
-   key so that destroying and rebuilding your Doodba container handles the Tailscale
-   machine registration smoothly.
-4. Copy the generated key and replace `tskey-auth-your-key-here` in your
+2. Ve al menú **Settings > Keys**.
+3. Haz clic en **Generate auth key**. Recomendamos crear una clave de tipo **Reusable**
+   (Reutilizable) o **Ephemeral** (Efímera) para que, al destruir y volver a construir
+   tu contenedor Doodba, el registro de la máquina en Tailscale se maneje sin problemas.
+4. Copia la clave generada y reemplaza `tskey-auth-your-key-here` en tu configuración de
    `docker-compose.yml`.
