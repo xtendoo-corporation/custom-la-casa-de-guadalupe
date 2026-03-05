@@ -47,7 +47,7 @@ CASHDRO_READ_TIMEOUT = 30      # seconds
 
 class CashdroProxyController(http.Controller):
 
-    @http.route("/cashdro/proxy", type="json", auth="user", methods=["POST"])
+    @http.route("/cashdro/proxy", type="jsonrpc", auth="user", methods=["POST"])
     def cashdro_proxy(self, cashdro_url=None, **kwargs):
         """Forward a GET request to the CashDro device and return its JSON
         response.
