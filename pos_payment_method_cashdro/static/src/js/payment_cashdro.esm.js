@@ -4,7 +4,6 @@
 import { AlertDialog } from "@web/core/confirmation_dialog/confirmation_dialog";
 import { PaymentInterface } from "@point_of_sale/app/utils/payment/payment_interface";
 import { _t } from "@web/core/l10n/translation";
-import { browser } from "@web/core/browser/browser";
 
 // ── Cashdro S connection tuning ──────────────────────────────────────────
 // The Cashdro Model S has a very limited embedded HTTP server (single thread).
@@ -199,26 +198,54 @@ export class PaymentCashdro extends PaymentInterface {
     // ── HTTP layer with retries & exponential backoff ────────────────────
 
     /**
-     * Perform a single fetch to the Cashdro device with PNA and SW bypass.
+     * Perform a single fetch to the Cashdro device.
      * Does NOT retry – that is handled by the caller.
+     *
+     * IMPORTANT – Mixed-Content / ERR_CERT_AUTHORITY_INVALID
+     * -------------------------------------------------------
+     * When Odoo is served over HTTPS the browser will block (or auto-upgrade)
+     * plain HTTP requests to the CashDro LAN IP, causing
+     * `ERR_CERT_AUTHORITY_INVALID` because the device has no valid TLS cert.
+     *
+     * To work around this we use XMLHttpRequest which, in some browser
+     * configurations, is less aggressively upgraded than fetch().  We also
+     * set a generous timeout so the single-threaded CashDro S has time to
+     * respond when it is busy counting coins.
+     *
+     * If the site uses HTTPS you MUST add the CashDro IP to Chrome's
+     * Insecure Origins allowlist (see README) or serve the POS over plain HTTP.
+     *
      * @param {string} url
-     * @returns {Promise<Response>}
+     * @returns {Promise<Object>} parsed JSON response
      */
     async _cashdro_fetch(url) {
-        // Append hw_proxy/hello so Odoo's Service Worker ignores this request
-        const separator = url.includes("?") ? "&" : "?";
-        const finalUrl = `${url}${separator}hw_proxy/hello`;
-
-        const response = await browser.fetch(finalUrl, {
-            method: "GET",
-            // targetAddressSpace: 'local' allows HTTPS → HTTP on private IPs
-            targetAddressSpace: "local",
+        return new Promise((resolve, reject) => {
+            const xhr = new XMLHttpRequest();
+            xhr.open("GET", url, true);
+            xhr.timeout = 30000; // 30 s – CashDro S can be very slow
+            xhr.onload = () => {
+                if (xhr.status >= 200 && xhr.status < 300) {
+                    try {
+                        resolve(JSON.parse(xhr.responseText));
+                    } catch (e) {
+                        reject(new Error(`Invalid JSON from CashDro: ${xhr.responseText.substring(0, 200)}`));
+                    }
+                } else {
+                    reject(new Error(`HTTP error! status: ${xhr.status}`));
+                }
+            };
+            xhr.onerror = () => {
+                reject(new Error(
+                    "Network error connecting to CashDro. " +
+                    "If Odoo is served over HTTPS, the browser blocks plain HTTP " +
+                    "requests to LAN devices (mixed-content). See README for solutions."
+                ));
+            };
+            xhr.ontimeout = () => {
+                reject(new Error("CashDro request timed out (30s)."));
+            };
+            xhr.send();
         });
-
-        if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
-        }
-        return response.json();
     }
 
     /**

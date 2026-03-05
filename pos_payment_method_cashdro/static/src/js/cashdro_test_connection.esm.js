@@ -53,22 +53,30 @@ class CashdroTestConnection extends Component {
                 console.log(
                     `[CashDro Test] Attempt ${attempt}/${MAX_RETRIES}: ${url}`
                 );
-                const response = await fetch(url, {
-                    method: "GET",
-                    // Allow HTTPS page to fetch HTTP on private network
-                    targetAddressSpace: "local",
+                const result = await new Promise((resolve, reject) => {
+                    const xhr = new XMLHttpRequest();
+                    xhr.open("GET", url, true);
+                    xhr.timeout = 15000;
+                    xhr.onload = () => resolve({ status: xhr.status, text: xhr.responseText });
+                    xhr.onerror = () => reject(new Error(
+                        "Network error – if Odoo is HTTPS the browser blocks HTTP " +
+                        "requests to LAN devices (mixed-content). Try accessing " +
+                        "the POS via plain HTTP or add the CashDro IP to Chrome's " +
+                        "insecure-origins allowlist."
+                    ));
+                    xhr.ontimeout = () => reject(new Error("Request timed out (15s)"));
+                    xhr.send();
                 });
-                const text = await response.text();
-                console.log("[CashDro Test] Response:", response.status, text);
+                console.log("[CashDro Test] Response:", result.status, result.text);
 
-                if (response.ok) {
+                if (result.status >= 200 && result.status < 300) {
                     this.env.services.notification.add(
-                        `Connection successful! Response: ${text.substring(0, 100)}`,
+                        `Connection successful! Response: ${result.text.substring(0, 100)}`,
                         { title: "CashDro – Success", type: "success", sticky: false }
                     );
                 } else {
                     this.env.services.notification.add(
-                        `Connection returned HTTP ${response.status}`,
+                        `Connection returned HTTP ${result.status}`,
                         { title: "CashDro – Warning", type: "warning", sticky: false }
                     );
                 }
