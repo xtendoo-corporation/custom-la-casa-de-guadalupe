@@ -55,3 +55,16 @@ services:
 
 If you use the sidecar approach with `network_mode: "service:odoo"`, the Odoo container
 will natively have access to the Tailscale network and the Cashdro IP.
+
+**Getting the TS_AUTHKEY for Docker deployments:** The `TS_AUTHKEY` allows the container
+to join your Tailscale network automatically on startup without requiring a manual
+login.
+
+1. Log into your Tailscale web console
+   [`login.tailscale.com`](https://login.tailscale.com).
+2. Navigate to **Settings > Keys**.
+3. Click **Generate auth key**. We recommend creating a **Reusable** or **Ephemeral**
+   key so that destroying and rebuilding your Doodba container handles the Tailscale
+   machine registration smoothly.
+4. Copy the generated key and replace `tskey-auth-your-key-here` in your
+   `docker-compose.yml`.
