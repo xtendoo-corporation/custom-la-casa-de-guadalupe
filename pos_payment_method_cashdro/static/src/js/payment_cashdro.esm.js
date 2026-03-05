@@ -83,7 +83,18 @@ export class PaymentCashdro extends PaymentInterface {
 
             const operation_id = res.data || "";
             if (!operation_id) {
-                throw new Error("No operation ID received from Cashdro");
+                // If it's not a successful operation string, it might be a JSON error response
+                let error_msg = "No operation ID received from Cashdro";
+                try {
+                    const error_data = JSON.parse(res.data);
+                    if (error_data.code && error_data.code < 0) {
+                        error_msg = `CashDro Error [${error_data.code}]: ${error_data.message || 'Unknown error'}`;
+                        if (error_data.code === -3) {
+                             error_msg = "CashDro is currently busy counting coins or bills. Please wait a moment and try again.";
+                        }
+                    }
+                } catch(e) { /* ignore parse error */ }
+                throw new Error(error_msg);
             }
             console.log("[Cashdro] Received Operation ID:", operation_id);
             this.pos.getOrder().cashdro_operation = operation_id;
@@ -174,6 +185,9 @@ export class PaymentCashdro extends PaymentInterface {
         let url = `${base_url}&operation=startOperation&type=${operationType}`;
         url += `&posid=pos-${this.pos.session.name}`;
         url += `&posuser=${user}`;
+        // Enforce idempotency: pass order uuid as aliasid so Cashdro does not start 2 operations
+        const order_id = this.pos.getOrder() ? this.pos.getOrder().uuid : Date.now();
+        url += `&aliasid=${order_id}`;
         url += `&parameters=${encodeURIComponent(JSON.stringify(parameters))}`;
         return url;
     }
@@ -279,6 +293,17 @@ export class PaymentCashdro extends PaymentInterface {
         while (true) {
             // Global timeout guard
             if (Date.now() - startTime > CASHDRO_POLL_GLOBAL_TIMEOUT) {
+                // Time's up, interrupt the CashDro explicitly so it doesn't get stuck waiting for coins forever
+                console.error(`[Cashdro] Operation timed out after ${CASHDRO_POLL_GLOBAL_TIMEOUT / 1000}s. Sending cancel...`);
+                try {
+                     const parser = new URL(request_url);
+                     const operationIdMatch = parser.search.match(/operationId=([^&]+)/);
+                     if (operationIdMatch && operationIdMatch[1]) {
+                         await this.cashdro_finish_operation(operationIdMatch[1]);
+                     }
+                } catch(e) {
+                     console.error("[Cashdro] Failed to send cancel on timeout:", e);
+                }
                 throw new Error(
                     `Cashdro operation timed out after ${
                         CASHDRO_POLL_GLOBAL_TIMEOUT / 1000
