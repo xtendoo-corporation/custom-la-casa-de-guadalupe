@@ -15,6 +15,7 @@
         "views/pos_payment_method_views.xml",
     ],
     "assets": {
-        "point_of_sale._assets_pos": ["pos_payment_method_cashdro/static/src/**/*"],
+        "point_of_sale._assets_pos": ["pos_payment_method_cashdro/static/src/js/payment_cashdro.esm.js", "pos_payment_method_cashdro/static/src/js/models.esm.js"],
+        "web.assets_backend": ["pos_payment_method_cashdro/static/src/js/cashdro_test_connection.esm.js"],
     },
 }
