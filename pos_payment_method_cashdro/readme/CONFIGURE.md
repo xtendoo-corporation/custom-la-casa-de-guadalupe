@@ -72,5 +72,10 @@ automáticamente al arrancar, sin que tengas que iniciar sesión manualmente.
 3. Haz clic en **Generate auth key**. Recomendamos crear una clave de tipo **Reusable**
    (Reutilizable) o **Ephemeral** (Efímera) para que, al destruir y volver a construir
    tu contenedor Doodba, el registro de la máquina en Tailscale se maneje sin problemas.
+   > **Importante:** Para entornos de producción, asegúrate de marcar la opción **"Never
+   > expires"** (Nunca expira) al generar la clave para evitar que el TPV pierda la
+   > conexión pasados 90 días. Alternativamente, puedes generar un **OAuth Client**
+   > asignándole permisos sobre un tag (ej. `tag:cashdro`) de forma que las credenciales
+   > sean 100% permanentes.
 4. Copia la clave generada y reemplaza `tskey-auth-your-key-here` en tu configuración de
    `docker-compose.yml`.
