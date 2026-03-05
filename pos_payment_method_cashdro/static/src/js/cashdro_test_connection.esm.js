@@ -1,17 +1,15 @@
 /** @odoo-module */
 /**
- * Client action that tests the CashDro connection directly from the browser.
+ * Client action that tests the CashDro connection through the Odoo backend
+ * proxy (``/cashdro/proxy``).
  *
- * Why from the browser and not from the Odoo server?
- * --------------------------------------------------
- * The CashDro device lives on the store's local network (e.g. 192.168.1.137).
- * The Odoo server may run in Docker, in the cloud, or on a different network
- * segment – it simply cannot reach a private LAN IP.  The *browser* of the
- * person configuring the payment method, however, IS on that same local
- * network, so the fetch() request can reach the CashDro just fine.
+ * The proxy avoids HTTPS → HTTP mixed-content issues because the browser
+ * only talks to Odoo (same origin, HTTPS) and it is the Python backend
+ * that reaches the CashDro device over plain HTTP on the LAN.
  */
 import { registry } from "@web/core/registry";
 import { Component, xml } from "@odoo/owl";
+import { rpc } from "@web/core/network/rpc";
 
 class CashdroTestConnection extends Component {
     static template = xml`<div/>`;
@@ -33,14 +31,14 @@ class CashdroTestConnection extends Component {
             return;
         }
 
-        const url =
+        const cashdro_url =
             `${host}/Cashdro3WS/index.php` +
             `?name=${encodeURIComponent(user || "")}` +
             `&password=${encodeURIComponent(password || "")}` +
             `&operation=askOperation&operationId=0`;
 
         this.env.services.notification.add(
-            "Testing connection to CashDro from your browser…",
+            "Testing connection to CashDro via server proxy…",
             { title: "CashDro", type: "info" }
         );
 
@@ -51,33 +49,20 @@ class CashdroTestConnection extends Component {
         for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
             try {
                 console.log(
-                    `[CashDro Test] Attempt ${attempt}/${MAX_RETRIES}: ${url}`
+                    `[CashDro Test] Attempt ${attempt}/${MAX_RETRIES} (via proxy): ${cashdro_url}`
                 );
-                const result = await new Promise((resolve, reject) => {
-                    const xhr = new XMLHttpRequest();
-                    xhr.open("GET", url, true);
-                    xhr.timeout = 15000;
-                    xhr.onload = () => resolve({ status: xhr.status, text: xhr.responseText });
-                    xhr.onerror = () => reject(new Error(
-                        "Network error – if Odoo is HTTPS the browser blocks HTTP " +
-                        "requests to LAN devices (mixed-content). Try accessing " +
-                        "the POS via plain HTTP or add the CashDro IP to Chrome's " +
-                        "insecure-origins allowlist."
-                    ));
-                    xhr.ontimeout = () => reject(new Error("Request timed out (15s)"));
-                    xhr.send();
-                });
-                console.log("[CashDro Test] Response:", result.status, result.text);
+                const result = await rpc("/cashdro/proxy", { cashdro_url });
+                console.log("[CashDro Test] Proxy response:", result);
 
-                if (result.status >= 200 && result.status < 300) {
+                if (result.ok) {
                     this.env.services.notification.add(
-                        `Connection successful! Response: ${result.text.substring(0, 100)}`,
+                        `Connection successful! Response: ${JSON.stringify(result.data).substring(0, 100)}`,
                         { title: "CashDro – Success", type: "success", sticky: false }
                     );
                 } else {
                     this.env.services.notification.add(
-                        `Connection returned HTTP ${result.status}`,
-                        { title: "CashDro – Warning", type: "warning", sticky: false }
+                        `CashDro error: ${result.error}`,
+                        { title: "CashDro – Warning", type: "warning", sticky: true }
                     );
                 }
                 this._goBack();
@@ -100,7 +85,7 @@ class CashdroTestConnection extends Component {
         console.error("[CashDro Test] All attempts failed:", lastError);
         this.env.services.notification.add(
             `Could not connect to CashDro after ${MAX_RETRIES} retries. ` +
-                `Make sure your browser can reach ${host} on the local network. ` +
+                `Make sure the Odoo server can reach ${host}. ` +
                 `Error: ${lastError?.message || lastError}`,
             { title: "CashDro – Connection Error", type: "danger", sticky: true }
         );

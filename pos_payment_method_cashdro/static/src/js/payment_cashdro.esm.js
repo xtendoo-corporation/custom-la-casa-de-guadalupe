@@ -4,6 +4,7 @@
 import { AlertDialog } from "@web/core/confirmation_dialog/confirmation_dialog";
 import { PaymentInterface } from "@point_of_sale/app/utils/payment/payment_interface";
 import { _t } from "@web/core/l10n/translation";
+import { rpc } from "@web/core/network/rpc";
 
 // ── Cashdro S connection tuning ──────────────────────────────────────────
 // The Cashdro Model S has a very limited embedded HTTP server (single thread).
@@ -198,54 +199,28 @@ export class PaymentCashdro extends PaymentInterface {
     // ── HTTP layer with retries & exponential backoff ────────────────────
 
     /**
-     * Perform a single fetch to the Cashdro device.
-     * Does NOT retry – that is handled by the caller.
+     * Send a request to the CashDro device **through the Odoo backend proxy**
+     * (``/cashdro/proxy``).
      *
-     * IMPORTANT – Mixed-Content / ERR_CERT_AUTHORITY_INVALID
-     * -------------------------------------------------------
-     * When Odoo is served over HTTPS the browser will block (or auto-upgrade)
-     * plain HTTP requests to the CashDro LAN IP, causing
-     * `ERR_CERT_AUTHORITY_INVALID` because the device has no valid TLS cert.
+     * Why a proxy?
+     * ------------
+     * Odoo is served over HTTPS.  The CashDro only speaks plain HTTP (or
+     * HTTPS with a self-signed cert) on the LAN.  Browsers block these
+     * requests as "mixed content" → ERR_CERT_AUTHORITY_INVALID.
      *
-     * To work around this we use XMLHttpRequest which, in some browser
-     * configurations, is less aggressively upgraded than fetch().  We also
-     * set a generous timeout so the single-threaded CashDro S has time to
-     * respond when it is busy counting coins.
+     * By routing through /cashdro/proxy the browser only talks HTTPS to
+     * Odoo, and the Python backend talks HTTP to the CashDro on the LAN
+     * with verify=False (as recommended by the CashDro manual §3.1.1).
      *
-     * If the site uses HTTPS you MUST add the CashDro IP to Chrome's
-     * Insecure Origins allowlist (see README) or serve the POS over plain HTTP.
-     *
-     * @param {string} url
-     * @returns {Promise<Object>} parsed JSON response
+     * @param {string} url – full URL to the CashDro device
+     * @returns {Promise<Object>} parsed JSON response from CashDro
      */
     async _cashdro_fetch(url) {
-        return new Promise((resolve, reject) => {
-            const xhr = new XMLHttpRequest();
-            xhr.open("GET", url, true);
-            xhr.timeout = 30000; // 30 s – CashDro S can be very slow
-            xhr.onload = () => {
-                if (xhr.status >= 200 && xhr.status < 300) {
-                    try {
-                        resolve(JSON.parse(xhr.responseText));
-                    } catch (e) {
-                        reject(new Error(`Invalid JSON from CashDro: ${xhr.responseText.substring(0, 200)}`));
-                    }
-                } else {
-                    reject(new Error(`HTTP error! status: ${xhr.status}`));
-                }
-            };
-            xhr.onerror = () => {
-                reject(new Error(
-                    "Network error connecting to CashDro. " +
-                    "If Odoo is served over HTTPS, the browser blocks plain HTTP " +
-                    "requests to LAN devices (mixed-content). See README for solutions."
-                ));
-            };
-            xhr.ontimeout = () => {
-                reject(new Error("CashDro request timed out (30s)."));
-            };
-            xhr.send();
-        });
+        const result = await rpc("/cashdro/proxy", { cashdro_url: url });
+        if (!result.ok) {
+            throw new Error(result.error || "Unknown CashDro proxy error");
+        }
+        return result.data;
     }
 
     /**
