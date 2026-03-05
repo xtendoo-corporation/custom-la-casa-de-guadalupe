@@ -28,3 +28,30 @@ We recommend using **Tailscale** for a quick Subnet Routing setup:
 5. In Odoo Payment Method configuration, keep the actual LAN IP of the CashDro (e.g.
    `192.168.1.50`). The Odoo server will now successfully reach it through the Tailscale
    tunnel.
+
+### Note for Docker / Doodba Environments
+
+If your Odoo is running inside a Docker container (like a **Doodba** environment),
+simply installing Tailscale on the Linux host is usually enough, **provided that IP
+forwarding is enabled** so the Docker containers can route traffic through the host's
+`tailscale0` interface to the store's subnet.
+
+Alternatively, you can run Tailscale as a sidecar container in your
+`docker-compose.yml`:
+
+```yaml
+services:
+  tailscale:
+    image: tailscale/tailscale:latest
+    hostname: odoocloud-tailscale
+    environment:
+      - TS_AUTHKEY=tskey-auth-your-key-here
+      - TS_ROUTES=192.168.1.0/24 # Accept routes from the store
+    network_mode: "service:odoo" # Attach directly to Odoo's network namespace
+    cap_add:
+      - net_admin
+      - sys_module
+```
+
+If you use the sidecar approach with `network_mode: "service:odoo"`, the Odoo container
+will natively have access to the Tailscale network and the Cashdro IP.
