@@ -90,11 +90,15 @@ export class PaymentCashdro extends PaymentInterface {
 
             payment_line.cashdro_operation_data = operation_data;
 
-            // totalin viene en céntimos, convertir a euros
-            const tendered = parseFloat(operation_data.totalin) / 100;
-            console.log("[Cashdro-LOG] Total introducido por el cliente (€):", tendered);
+            // Recoger el importe introducido (las claves varían según firmware de Cashdro)
+            const rawAmount = operation_data.totalin || operation_data.amountIn || operation_data.AmountIn || operation_data.amount;
+            const tendered = rawAmount ? (parseFloat(rawAmount) / 100) : payment_line.amount;
+            
+            console.log("[Cashdro-LOG] Total introducido por el cliente (€):", tendered, " | Datos extraídos:", rawAmount);
 
-            payment_line.setAmount(tendered);
+            if (!isNaN(tendered)) {
+                payment_line.setAmount(tendered);
+            }
             payment_line.setPaymentStatus("done");
             console.log("[Cashdro-LOG] Pago finalizado con éxito en Odoo.");
 
