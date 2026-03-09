@@ -293,15 +293,15 @@ export class PaymentCashdro extends PaymentInterface {
                 const data = this._cashdro_parse_response(raw);
                 console.log("[Cashdro-LOG] Estado actual de la máquina:", data?.operation?.state);
 
-                // F = Finished, E = Error, C = Cancelled
+                // F = Finished, E = Executing, C = Cancelled, W = Waiting
                 if (data?.operation?.state === "F") {
                     console.log("[Cashdro-LOG] ¡Estado F detectado! Operación completada.");
                     return data.operation;
                 }
 
-                if (data?.operation?.state === "E" || data?.operation?.state === "C") {
-                    console.error("[Cashdro-LOG] Operación cancelada o con error en la máquina.");
-                    throw new Error("Operación cancelada en la máquina.");
+                if (data?.operation?.state === "C" || String(data?.operation?.canceled) === "1" || String(data?.operation?.error) === "1") {
+                    console.error("[Cashdro-LOG] Operación cancelada o con error en la máquina.", data?.operation);
+                    throw new Error("Operación cancelada o abortada por error en Cashdro.");
                 }
 
             } catch (error) {
