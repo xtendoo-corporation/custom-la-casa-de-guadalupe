@@ -1,357 +1,290 @@
 /** @odoo-module */
 /* Copyright 2021 Tecnativa - David Vidal
    License AGPL-3.0 or later (https://www.gnu.org/licenses/agpl).*/
+
 import { AlertDialog } from "@web/core/confirmation_dialog/confirmation_dialog";
 import { PaymentInterface } from "@point_of_sale/app/utils/payment/payment_interface";
 import { _t } from "@web/core/l10n/translation";
-import { rpc } from "@web/core/network/rpc";
 
-// ── Cashdro S connection tuning ──────────────────────────────────────────
-// The Cashdro Model S has a very limited embedded HTTP server (single thread).
-// When it's busy counting coins it cannot accept new TCP connections, causing
-// transient ConnectTimeoutError. These constants control the retry behaviour.
-const CASHDRO_REQUEST_MAX_RETRIES = 3; // retries per individual HTTP request
-const CASHDRO_REQUEST_INITIAL_DELAY = 2000; // ms before first retry (doubles each time)
-const CASHDRO_POLL_INITIAL_INTERVAL = 1000; // ms – first poll wait
-const CASHDRO_POLL_MAX_INTERVAL = 5000; // ms – cap for progressive poll wait
-const CASHDRO_POLL_INTERVAL_INCREMENT = 500; // ms added each successful poll cycle
-const CASHDRO_POLL_MAX_ERRORS = 5; // consecutive HTTP errors before aborting poll
-const CASHDRO_POLL_GLOBAL_TIMEOUT = 5 * 60 * 1000; // 5 min global timeout for polling
+// Constantes de reintento
+const CASHDRO_REQUEST_MAX_RETRIES = 3;
+const CASHDRO_REQUEST_INITIAL_DELAY = 2000;
+const CASHDRO_POLL_INITIAL_INTERVAL = 1000;
+const CASHDRO_POLL_MAX_INTERVAL = 5000;
+const CASHDRO_POLL_GLOBAL_TIMEOUT = 5 * 60 * 1000;
+const CASHDRO_POLL_MAX_ERRORS = 5;
 
 export class PaymentCashdro extends PaymentInterface {
-    /**
-     * @override
-     */
     setup() {
         super.setup(...arguments);
         this.supports_reversals = true;
+        console.log("[Cashdro-LOG] Componente inicializado correctamente.");
     }
 
-    /**
-     * @override
-     */
-    sendPaymentReversal(uuid) {
-        super.sendPaymentReversal(...arguments);
-        const order = this.pos.getOrder();
-        const line = order.getSelectedPaymentline();
-        line.setPaymentStatus("reversing");
-        return this.cashdro_send_payment_request(order);
-    }
-
-    /**
-     * @override
-     */
-    sendPaymentCancel() {
-        super.sendPaymentCancel(...arguments);
-        const operation = this.pos.getOrder().cashdro_operation;
-        if (!operation) {
-            return Promise.resolve();
-        }
-        return this.cashdro_finish_operation(operation);
-    }
-
-    /**
-     * @override
-     */
     sendPaymentRequest() {
         super.sendPaymentRequest(...arguments);
         const order = this.pos.getOrder();
         const line = order.getSelectedPaymentline();
+        console.log("[Cashdro-LOG] Botón 'Pagar' pulsado. Pedido:", order.uuid);
+        console.log("[Cashdro-LOG] Importe en la línea de pago Odoo:", line.amount);
+
         line.setPaymentStatus("waiting");
         return this.cashdro_send_payment_request(order);
     }
 
-    // --------------------------------------------------------------------------
-    // Private
-    // --------------------------------------------------------------------------
-
     async cashdro_send_payment_request(order) {
         const payment_line = order.getSelectedPaymentline();
-        console.log("[Cashdro] Starting payment request for order:", order.uuid);
+
         try {
-            // Cashdro treats decimals as positions in an integer we also have
-            // to deal with floating point computing to avoid decimals at the
-            // end or the drawer will reject our request.
-            const amount = Math.round(order.remainingDue * 100);
-            const payment_url = this._cashdro_payment_url({ amount: amount });
-            console.log("[Cashdro] Calculated amount (cents):", amount);
-            console.log("[Cashdro] Payment URL:", payment_url);
+            // Importe en CÉNTIMOS ENTEROS (500 = 5,00€)
+            const amount_cents = Math.round(Math.abs(payment_line.amount) * 100);
+            console.log("[Cashdro-LOG] Preparando venta para importe (céntimos):", amount_cents);
 
-            console.log("[Cashdro] Sending startOperation request...");
-            const res = await this._cashdro_request(payment_url);
-            console.log("[Cashdro] startOperation response:", res);
-
-            const operation_id = res.data || "";
-            if (!operation_id) {
-                // If it's not a successful operation string, it might be a JSON error response
-                let error_msg = "No operation ID received from Cashdro";
-                try {
-                    const error_data = JSON.parse(res.data);
-                    if (error_data.code && error_data.code < 0) {
-                        error_msg = `CashDro Error [${error_data.code}]: ${error_data.message || 'Unknown error'}`;
-                        if (error_data.code === -3) {
-                             error_msg = "CashDro is currently busy counting coins or bills. Please wait a moment and try again.";
-                        }
-                    }
-                } catch(e) { /* ignore parse error */ }
-                throw new Error(error_msg);
+            if (amount_cents <= 0) {
+                throw new Error("El importe es 0 o negativo. La máquina no se activará.");
             }
-            console.log("[Cashdro] Received Operation ID:", operation_id);
+
+            const base_url = this._cashdro_base_url();
+            if (!base_url) {
+                throw new Error("No se pudo construir la URL del Cashdro. Revisa la configuración del método de pago.");
+            }
+
+            const method = order.getSelectedPaymentline().payment_method_id;
+            const payment_params = this._cashdro_payment_params({ amount: amount_cents }, method);
+            console.log("[Cashdro-LOG] URL:", base_url, "Params:", payment_params);
+
+            // PASO 1: startOperation
+            console.log("[Cashdro-LOG] Solicitando ID de operación a la máquina...");
+            const res = await this._cashdro_request(base_url, payment_params);
+            console.log("[Cashdro-LOG] Respuesta de startOperation:", res);
+
+            if (!res || res.code !== 1) {
+                throw new Error("El Cashdro devolvió un error en startOperation: " + JSON.stringify(res));
+            }
+
+            const operation_id = String(res.data).trim();
+            console.log("[Cashdro-LOG] ID de operación recibido:", operation_id);
+
+            if (!operation_id || isNaN(operation_id)) {
+                throw new Error("El ID de operación recibido no es válido: " + operation_id);
+            }
+
             this.pos.getOrder().cashdro_operation = operation_id;
 
-            // Acknowledge the operation
-            const ack_url = this._cashdro_ack_url(operation_id);
-            console.log("[Cashdro] Sending acknowledgeOperationId request...", ack_url);
-            const res_ack = await this._cashdro_request(ack_url);
-            console.log("[Cashdro] acknowledgeOperationId response:", res_ack);
+            // PASO 2: Acknowledge
+            const ack_params = this._cashdro_ack_params(operation_id, method);
+            console.log("[Cashdro-LOG] Enviando Acknowledge...");
+            const ack_res = await this._cashdro_request(base_url, ack_params);
+            console.log("[Cashdro-LOG] Acknowledge OK. Respuesta:", ack_res);
 
-            // Validate the operation (polling with tolerance)
-            const ask_url = this._cashdro_ask_url(operation_id);
-            console.log("[Cashdro] Starting polling for operation status...", ask_url);
-            const operation_data = await this._cashdro_request_payment(ask_url);
-            console.log("[Cashdro] Final operation data received:", operation_data);
+            // PASO 3: Polling (Esperar al dinero)
+            const ask_params = this._cashdro_ask_params(operation_id, method);
+            console.log("[Cashdro-LOG] Iniciando bucle de espera (Polling)...");
 
-            const data = JSON.parse(operation_data.data);
-            payment_line.cashdro_operation_data = data;
-            const tendered = data.operation.totalin / 100;
-            console.log("[Cashdro] Total tendered (from data.operation.totalin):", tendered);
+            const operation_data = await this._cashdro_request_payment(base_url, ask_params);
+            console.log("[Cashdro-LOG] ¡Pago completado! Datos finales:", operation_data);
 
-            console.log("[Cashdro] Setting payment line amount and finishing...");
+            payment_line.cashdro_operation_data = operation_data;
+
+            // FIX: totalin viene en céntimos en la respuesta (500 = 5,00€)
+            const tendered = parseFloat(operation_data.total) / 100;
+            console.log("[Cashdro-LOG] Total introducido por el cliente (€):", tendered);
+
             payment_line.setAmount(tendered);
+            payment_line.setPaymentStatus("done");
+            console.log("[Cashdro-LOG] Pago finalizado con éxito en Odoo.");
+
+            // Finalizar operación física
+            await this.cashdro_finish_operation(operation_id, base_url, method);
+
         } catch (error) {
-            console.error("[Cashdro] Error during payment request:", error);
+            console.error("[Cashdro-LOG] FALLO EN EL PROCESO:", error);
             payment_line.setPaymentStatus("retry");
             this.env.services.dialog.add(AlertDialog, {
-                title: _t("Error"),
-                body: _t(
-                    "An error occurred while connecting to the cashdro: %s",
-                    error.message || error
-                ),
+                title: _t("Fallo de Conexión CashDro"),
+                body: _t("Mira la consola (F12) para ver el error: %s", error.message || error),
             });
             return false;
         }
         return true;
     }
 
-    async cashdro_finish_operation(operation) {
-        console.log("[Cashdro] Finishing operation:", operation);
+    async cashdro_finish_operation(operation, base_url, method) {
+        console.log("[Cashdro-LOG] Intentando cerrar operación ID:", operation);
+        const finish_params = this._cashdro_finish_params(operation, method);
+        try {
+            const res = await this._cashdro_request(base_url, finish_params);
+            console.log("[Cashdro-LOG] Operación cerrada en la máquina. Respuesta:", res);
+            this.pos.getOrder().cashdro_operation = false;
+        } catch (error) {
+            console.error("[Cashdro-LOG] No se pudo cerrar la operación (no es crítico):", error);
+        }
+    }
+
+    _cashdro_base_url() {
         const order = this.pos.getOrder();
-        if (operation) {
-            const finish_url = this._cashdro_finish_url(operation);
-            console.log("[Cashdro] Sending finishOperation request...", finish_url);
+        const method = order?.getSelectedPaymentline()?.payment_method_id;
+
+        if (!method?.cashdro_host) {
+            console.error("[Cashdro-LOG] ERROR: No se encuentra la IP del Cashdro.");
+            return false;
+        }
+
+        let host = method.cashdro_host;
+        if (!host.startsWith('http://') && !host.startsWith('https://')) {
+            host = 'https://' + host;
+        }
+
+        return `${host}/Cashdro3WS/index.php`;
+    }
+
+    _cashdro_payment_params(parameters, method) {
+        const params = JSON.stringify({ amount: String(parameters.amount) });
+        return {
+            aliasId: "",
+            isManual: "1",
+            name: method.cashdro_user,
+            operation: "startOperation",
+            parameters: params,
+            password: method.cashdro_password,
+            startnow: "true",
+            type: "4",
+        };
+    }
+
+    _cashdro_ack_params(op_id, method) {
+        return {
+            name: method.cashdro_user,
+            operation: "acknowledgeOperationId",
+            operationId: op_id,
+            password: method.cashdro_password,
+        };
+    }
+
+    _cashdro_ask_params(op_id, method) {
+        return {
+            name: method.cashdro_user,
+            operation: "askOperation",
+            operationId: op_id,
+            password: method.cashdro_password,
+        };
+    }
+
+    _cashdro_finish_params(op_id, method) {
+        return {
+            name: method.cashdro_user,
+            operation: "finishOperation",
+            operationId: op_id,
+            password: method.cashdro_password,
+            type: "2",
+        };
+    }
+
+    // Parsea la respuesta de la máquina teniendo en cuenta que
+    // el campo "data" puede ser un JSON string dentro del JSON principal
+    // Respuesta real: {"code":1,"data":"{\"operation\":{\"state\":\"F\",...}}"}
+    _cashdro_parse_response(raw) {
+        if (!raw) return null;
+        // Si data es un string, parsearlo de nuevo (doble JSON)
+        if (raw.data && typeof raw.data === "string") {
             try {
-                const res = await this._cashdro_request(finish_url);
-                console.log("[Cashdro] finishOperation response:", res);
-                order.cashdro_operation = false;
-            } catch (error) {
-                console.error("[Cashdro] Error finishing operation:", error);
+                const inner = JSON.parse(raw.data);
+                console.log("[Cashdro-LOG] Inner data parseado:", inner);
+                return inner;
+            } catch (e) {
+                console.warn("[Cashdro-LOG] No se pudo parsear raw.data como JSON:", raw.data);
+                return raw;
             }
         }
+        return raw.data || raw;
     }
 
-    // ── URL builders ─────────────────────────────────────────────────────
+    // --- Motor de peticiones ---
+    // POST con params en query string, usando XHR para evitar el Service Worker de Odoo
 
-    _cashdro_url() {
-        const order = this.pos.getOrder();
-        if (!order) {
-            console.warn("[Cashdro] No active order found to build URL");
-            return false;
-        }
-        const selected_line = order.getSelectedPaymentline();
-        if (!selected_line) {
-            console.warn("[Cashdro] No selected payment line found to build URL");
-            return false;
-        }
-        const method = selected_line.payment_method_id;
-        const host = method && method.cashdro_host;
-        if (!host) {
-            console.error(
-                "[Cashdro] Cashdro host is missing in payment method configuration"
-            );
-            return false;
-        }
-        let url = `${host}/Cashdro3WS/index.php`;
-        url += `?name=${method.cashdro_user}`;
-        url += `&password=${method.cashdro_password}`;
-        return url;
+    _cashdro_xhr(base_url, params) {
+        return new Promise((resolve, reject) => {
+            const query = new URLSearchParams(params).toString();
+            const url = `${base_url}?${query}`;
+            console.log("[Cashdro-LOG] XHR POST a:", url);
+
+            const xhr = new XMLHttpRequest();
+            xhr.open("POST", url, true);
+            xhr.timeout = 30000;
+            xhr.setRequestHeader("Content-Type", "application/json");
+            xhr.setRequestHeader("Accept", "application/json, text/plain, */*");
+
+            xhr.onload = () => {
+                if (xhr.status >= 200 && xhr.status < 300) {
+                    console.log("[Cashdro-LOG] XHR respuesta:", xhr.responseText);
+                    try {
+                        resolve(JSON.parse(xhr.responseText));
+                    } catch (e) {
+                        resolve(xhr.responseText);
+                    }
+                } else {
+                    reject(new Error(`Error HTTP: ${xhr.status}`));
+                }
+            };
+            xhr.onerror = () => reject(new Error("Error de red (XHR). Comprueba que el Cashdro es accesible."));
+            xhr.ontimeout = () => reject(new Error("Timeout de conexión con el Cashdro."));
+            xhr.send();
+        });
     }
 
-    _cashdro_payment_url(parameters) {
-        const user = this.pos.cashier.id || this.pos.user.id;
-        const operationType = parameters.amount > 0 ? 4 : 3;
-        parameters = { ...parameters, amount: Math.abs(parameters.amount) };
-        const base_url = this._cashdro_url();
-        if (!base_url) return "";
-        let url = `${base_url}&operation=startOperation&type=${operationType}`;
-        url += `&posid=pos-${this.pos.session.name}`;
-        url += `&posuser=${user}`;
-        // Enforce idempotency: pass order uuid as aliasid so Cashdro does not start 2 operations
-        const order_id = this.pos.getOrder() ? this.pos.getOrder().uuid : Date.now();
-        url += `&aliasid=${order_id}`;
-        url += `&parameters=${encodeURIComponent(JSON.stringify(parameters))}`;
-        return url;
-    }
-
-    _cashdro_ack_url(operation_id) {
-        const base_url = this._cashdro_url();
-        if (!base_url) return "";
-        return `${base_url}&operation=acknowledgeOperationId&operationId=${operation_id}`;
-    }
-
-    _cashdro_ask_url(operation_id) {
-        const base_url = this._cashdro_url();
-        if (!base_url) return "";
-        return `${base_url}&operation=askOperation&operationId=${operation_id}`;
-    }
-
-    _cashdro_finish_url(operation_id) {
-        const base_url = this._cashdro_url();
-        if (!base_url) return "";
-        return `${base_url}&operation=finishOperation&type=2&operationId=${operation_id}`;
-    }
-
-    // ── HTTP layer with retries & exponential backoff ────────────────────
-
-    /**
-     * Send a request to the CashDro device **through the Odoo backend proxy**
-     * (``/cashdro/proxy``).
-     *
-     * Why a proxy?
-     * ------------
-     * Odoo is served over HTTPS.  The CashDro only speaks plain HTTP (or
-     * HTTPS with a self-signed cert) on the LAN.  Browsers block these
-     * requests as "mixed content" → ERR_CERT_AUTHORITY_INVALID.
-     *
-     * By routing through /cashdro/proxy the browser only talks HTTPS to
-     * Odoo, and the Python backend talks HTTP to the CashDro on the LAN
-     * with verify=False (as recommended by the CashDro manual §3.1.1).
-     *
-     * @param {string} url – full URL to the CashDro device
-     * @returns {Promise<Object>} parsed JSON response from CashDro
-     */
-    async _cashdro_fetch(url) {
-        const result = await rpc("/cashdro/proxy", { cashdro_url: url });
-        if (!result.ok) {
-            throw new Error(result.error || "Unknown CashDro proxy error");
-        }
-        return result.data;
-    }
-
-    /**
-     * Send a request to the Cashdro with automatic retries and exponential
-     * backoff.  The Cashdro S often refuses TCP connections while it is busy;
-     * retrying after a short wait usually succeeds.
-     *
-     * @param {string} url
-     * @returns {Promise<Object>} parsed JSON response
-     */
-    async _cashdro_request(url) {
+    async _cashdro_request(base_url, params) {
         let lastError;
         for (let attempt = 1; attempt <= CASHDRO_REQUEST_MAX_RETRIES; attempt++) {
             try {
-                console.log(
-                    `[Cashdro] Request attempt ${attempt}/${CASHDRO_REQUEST_MAX_RETRIES}: ${url}`
-                );
-                const data = await this._cashdro_fetch(url);
-                console.log("[Cashdro] Response data:", data);
-                return data;
+                return await this._cashdro_xhr(base_url, params);
             } catch (error) {
                 lastError = error;
-                console.warn(
-                    `[Cashdro] Attempt ${attempt} failed:`,
-                    error.message || error
-                );
+                console.warn(`[Cashdro-LOG] Intento ${attempt} fallido:`, error.message);
                 if (attempt < CASHDRO_REQUEST_MAX_RETRIES) {
-                    const delay =
-                        CASHDRO_REQUEST_INITIAL_DELAY * Math.pow(2, attempt - 1);
-                    console.log(`[Cashdro] Waiting ${delay}ms before retry…`);
-                    await new Promise((r) => setTimeout(r, delay));
+                    await new Promise((r) => setTimeout(r, CASHDRO_REQUEST_INITIAL_DELAY));
                 }
             }
         }
-        console.error(
-            `[Cashdro] All ${CASHDRO_REQUEST_MAX_RETRIES} attempts failed.`
-        );
         throw lastError;
     }
 
-    /**
-     * Poll the Cashdro for the operation result.  Tolerates transient network
-     * errors (up to CASHDRO_POLL_MAX_ERRORS consecutive) and uses a
-     * progressive interval that grows from CASHDRO_POLL_INITIAL_INTERVAL up to
-     * CASHDRO_POLL_MAX_INTERVAL.  A global timeout prevents infinite loops.
-     *
-     * @param {string} request_url
-     * @returns {Promise<Object>} final operation data
-     */
-    async _cashdro_request_payment(request_url) {
+    async _cashdro_request_payment(base_url, params) {
         let pollInterval = CASHDRO_POLL_INITIAL_INTERVAL;
-        let consecutiveErrors = 0;
-        let attempts = 0;
+        let errors = 0;
         const startTime = Date.now();
 
         while (true) {
-            // Global timeout guard
             if (Date.now() - startTime > CASHDRO_POLL_GLOBAL_TIMEOUT) {
-                // Time's up, interrupt the CashDro explicitly so it doesn't get stuck waiting for coins forever
-                console.error(`[Cashdro] Operation timed out after ${CASHDRO_POLL_GLOBAL_TIMEOUT / 1000}s. Sending cancel...`);
-                try {
-                     const parser = new URL(request_url);
-                     const operationIdMatch = parser.search.match(/operationId=([^&]+)/);
-                     if (operationIdMatch && operationIdMatch[1]) {
-                         await this.cashdro_finish_operation(operationIdMatch[1]);
-                     }
-                } catch(e) {
-                     console.error("[Cashdro] Failed to send cancel on timeout:", e);
-                }
-                throw new Error(
-                    `Cashdro operation timed out after ${
-                        CASHDRO_POLL_GLOBAL_TIMEOUT / 1000
-                    }s of polling.`
-                );
+                console.error("[Cashdro-LOG] TIMEOUT: Se han superado los 5 minutos de espera.");
+                throw new Error("Tiempo de espera agotado.");
             }
 
-            attempts++;
             try {
-                console.log(
-                    `[Cashdro] Polling attempt ${attempts} (interval ${pollInterval}ms)…`
-                );
-                const data_res = await this._cashdro_fetch(request_url);
-                // Reset consecutive error counter on success
-                consecutiveErrors = 0;
-                console.log(`[Cashdro] Poll response ${attempts}:`, data_res);
+                const raw = await this._cashdro_xhr(base_url, params);
 
-                const data = JSON.parse(data_res.data);
-                if (data.operation.state === "F") {
-                    console.log("[Cashdro] Operation finished!");
-                    return data_res;
+                // FIX: el campo data es un JSON string — hay que parsearlo
+                const data = this._cashdro_parse_response(raw);
+                console.log("[Cashdro-LOG] Estado actual de la máquina:", data?.operation?.state);
+
+                // F = Finished, E = Error, C = Cancelled
+                if (data?.operation?.state === "F") {
+                    console.log("[Cashdro-LOG] ¡Estado F detectado! Operación completada.");
+                    return data.operation;
                 }
-                console.log(
-                    `[Cashdro] Operation state: ${data.operation.state}. Continuing poll…`
-                );
+
+                if (data?.operation?.state === "E" || data?.operation?.state === "C") {
+                    console.error("[Cashdro-LOG] Operación cancelada o con error en la máquina.");
+                    throw new Error("Operación cancelada en la máquina.");
+                }
+
             } catch (error) {
-                consecutiveErrors++;
-                console.warn(
-                    `[Cashdro] Poll error ${consecutiveErrors}/${CASHDRO_POLL_MAX_ERRORS}:`,
-                    error.message || error
-                );
-                if (consecutiveErrors >= CASHDRO_POLL_MAX_ERRORS) {
-                    console.error(
-                        `[Cashdro] ${CASHDRO_POLL_MAX_ERRORS} consecutive poll errors – aborting.`
-                    );
-                    throw new Error(
-                        `Cashdro unreachable after ${CASHDRO_POLL_MAX_ERRORS} consecutive ` +
-                            `poll failures. Last error: ${error.message || error}`
-                    );
-                }
+                errors++;
+                console.warn("[Cashdro-LOG] Error durante la espera (Polling):", error.message);
+                if (errors >= CASHDRO_POLL_MAX_ERRORS) throw error;
             }
 
-            // Progressive wait: grows each cycle, capped at max
             await new Promise((r) => setTimeout(r, pollInterval));
-            pollInterval = Math.min(
-                pollInterval + CASHDRO_POLL_INTERVAL_INCREMENT,
-                CASHDRO_POLL_MAX_INTERVAL
-            );
+            pollInterval = Math.min(pollInterval + 500, CASHDRO_POLL_MAX_INTERVAL);
         }
     }
 }
