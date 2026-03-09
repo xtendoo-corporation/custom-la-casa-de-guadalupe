@@ -36,7 +36,6 @@ export class PaymentCashdro extends PaymentInterface {
         const payment_line = order.getSelectedPaymentline();
 
         try {
-            // Importe en CÉNTIMOS ENTEROS (500 = 5,00€)
             const amount_cents = Math.round(Math.abs(payment_line.amount) * 100);
             console.log("[Cashdro-LOG] Preparando venta para importe (céntimos):", amount_cents);
 
@@ -50,6 +49,10 @@ export class PaymentCashdro extends PaymentInterface {
             }
 
             const method = order.getSelectedPaymentline().payment_method_id;
+
+            // FIX: Si hay una operación anterior sin cerrar, limpiarla primero
+            await this._cashdro_cleanup_pending(base_url, method);
+
             const payment_params = this._cashdro_payment_params({ amount: amount_cents }, method);
             console.log("[Cashdro-LOG] URL:", base_url, "Params:", payment_params);
 
@@ -69,6 +72,7 @@ export class PaymentCashdro extends PaymentInterface {
                 throw new Error("El ID de operación recibido no es válido: " + operation_id);
             }
 
+            // Guardar operation_id para poder limpiar si falla
             this.pos.getOrder().cashdro_operation = operation_id;
 
             // PASO 2: Acknowledge
@@ -86,8 +90,8 @@ export class PaymentCashdro extends PaymentInterface {
 
             payment_line.cashdro_operation_data = operation_data;
 
-            // FIX: totalin viene en céntimos en la respuesta (500 = 5,00€)
-            const tendered = parseFloat(operation_data.total) / 100;
+            // totalin viene en céntimos, convertir a euros
+            const tendered = parseFloat(operation_data.totalin) / 100;
             console.log("[Cashdro-LOG] Total introducido por el cliente (€):", tendered);
 
             payment_line.setAmount(tendered);
@@ -109,6 +113,28 @@ export class PaymentCashdro extends PaymentInterface {
         return true;
     }
 
+    // Limpia cualquier operación pendiente antes de iniciar una nueva.
+    // Esto evita el error "Operation not queued" (code: -2).
+    async _cashdro_cleanup_pending(base_url, method) {
+        const pending_id = this.pos.getOrder()?.cashdro_operation;
+        if (pending_id) {
+            console.log("[Cashdro-LOG] Detectada operación pendiente sin cerrar:", pending_id, "— cerrando antes de continuar...");
+            await this.cashdro_finish_operation(pending_id, base_url, method);
+            await new Promise((r) => setTimeout(r, 1000));
+        } else {
+            // Intentar cerrar operación 0 por si hay algo colgado en la máquina
+            console.log("[Cashdro-LOG] Limpiando posibles operaciones huérfanas en la máquina...");
+            try {
+                const finish_params = this._cashdro_finish_params("0", method);
+                await this._cashdro_xhr(base_url, finish_params);
+                await new Promise((r) => setTimeout(r, 500));
+            } catch (e) {
+                // No es crítico — si no hay nada que limpiar la máquina devuelve error y lo ignoramos
+                console.log("[Cashdro-LOG] Sin operaciones huérfanas (normal).");
+            }
+        }
+    }
+
     async cashdro_finish_operation(operation, base_url, method) {
         console.log("[Cashdro-LOG] Intentando cerrar operación ID:", operation);
         const finish_params = this._cashdro_finish_params(operation, method);
@@ -118,6 +144,7 @@ export class PaymentCashdro extends PaymentInterface {
             this.pos.getOrder().cashdro_operation = false;
         } catch (error) {
             console.error("[Cashdro-LOG] No se pudo cerrar la operación (no es crítico):", error);
+            this.pos.getOrder().cashdro_operation = false;
         }
     }
 
@@ -180,12 +207,10 @@ export class PaymentCashdro extends PaymentInterface {
         };
     }
 
-    // Parsea la respuesta de la máquina teniendo en cuenta que
-    // el campo "data" puede ser un JSON string dentro del JSON principal
-    // Respuesta real: {"code":1,"data":"{\"operation\":{\"state\":\"F\",...}}"}
+    // Parsea la respuesta de la máquina teniendo en cuenta el doble JSON:
+    // {"code":1, "data": "{\"operation\":{\"state\":\"F\",...}}"}
     _cashdro_parse_response(raw) {
         if (!raw) return null;
-        // Si data es un string, parsearlo de nuevo (doble JSON)
         if (raw.data && typeof raw.data === "string") {
             try {
                 const inner = JSON.parse(raw.data);
@@ -261,8 +286,6 @@ export class PaymentCashdro extends PaymentInterface {
 
             try {
                 const raw = await this._cashdro_xhr(base_url, params);
-
-                // FIX: el campo data es un JSON string — hay que parsearlo
                 const data = this._cashdro_parse_response(raw);
                 console.log("[Cashdro-LOG] Estado actual de la máquina:", data?.operation?.state);
 
