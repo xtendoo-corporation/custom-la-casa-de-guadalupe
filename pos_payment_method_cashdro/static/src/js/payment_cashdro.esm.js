@@ -14,10 +14,16 @@ const CASHDRO_POLL_MAX_INTERVAL = 5000;
 const CASHDRO_POLL_GLOBAL_TIMEOUT = 5 * 60 * 1000;
 const CASHDRO_POLL_MAX_ERRORS = 5;
 
+// Reintentos cuando la máquina devuelve "Operation not queued"
+// Esperas: 2s, 4s, 6s, 8s, 10s — total máximo ~30s antes de rendirse
+const CASHDRO_NOT_QUEUED_MAX_RETRIES = 5;
+const CASHDRO_NOT_QUEUED_DELAY = 2000;
+
 export class PaymentCashdro extends PaymentInterface {
     setup() {
         super.setup(...arguments);
         this.supports_reversals = true;
+        this._last_operation_id = null;
         console.log("[Cashdro-LOG] Componente inicializado correctamente.");
     }
 
@@ -50,38 +56,18 @@ export class PaymentCashdro extends PaymentInterface {
 
             const method = order.getSelectedPaymentline().payment_method_id;
 
-            // Solo cerrar si Odoo recuerda un ID pendiente concreto
-            const pending_id = this.pos.getOrder()?.cashdro_operation;
-            if (pending_id) {
-                console.log("[Cashdro-LOG] Cerrando operación pendiente:", pending_id);
-                await this._cashdro_silent_finish(pending_id, base_url, method);
-                this.pos.getOrder().cashdro_operation = false;
-                await new Promise((r) => setTimeout(r, 500));
+            // Cerrar operación pendiente si tenemos el ID guardado
+            if (this._last_operation_id) {
+                console.log("[Cashdro-LOG] Cerrando operación pendiente guardada:", this._last_operation_id);
+                await this._cashdro_silent_finish(this._last_operation_id, base_url, method);
+                this._last_operation_id = null;
+                await new Promise((r) => setTimeout(r, 1000));
             }
 
             const payment_params = this._cashdro_payment_params({ amount: amount_cents }, method);
-            console.log("[Cashdro-LOG] URL:", base_url, "Params:", payment_params);
 
-            // PASO 1: startOperation
-            console.log("[Cashdro-LOG] Solicitando ID de operación a la máquina...");
-            const res = await this._cashdro_request(base_url, payment_params);
-            console.log("[Cashdro-LOG] Respuesta de startOperation:", res);
-
-            // Si la máquina dice "Operation not queued" (code -2), intentar limpiar y reintentar una vez
-            if (res && res.code === -2) {
-                console.warn("[Cashdro-LOG] Operation not queued — intentando limpiar la máquina y reintentar...");
-                await this._cashdro_silent_finish("0", base_url, method);
-                await new Promise((r) => setTimeout(r, 1000));
-                const res2 = await this._cashdro_request(base_url, payment_params);
-                if (!res2 || res2.code !== 1) {
-                    throw new Error("El Cashdro sigue bloqueado tras limpieza: " + JSON.stringify(res2));
-                }
-                return await this._cashdro_continue(res2, base_url, method, payment_line);
-            }
-
-            if (!res || res.code !== 1) {
-                throw new Error("El Cashdro devolvió un error en startOperation: " + JSON.stringify(res));
-            }
+            // PASO 1: startOperation con reintentos si la máquina no está lista
+            const res = await this._cashdro_start_with_retries(base_url, payment_params, method);
 
             return await this._cashdro_continue(res, base_url, method, payment_line);
 
@@ -96,6 +82,39 @@ export class PaymentCashdro extends PaymentInterface {
         }
     }
 
+    // Intenta startOperation hasta CASHDRO_NOT_QUEUED_MAX_RETRIES veces.
+    // Cuando la máquina devuelve -2 "Operation not queued" simplemente espera
+    // y reintenta — la máquina puede estar en un estado transitorio entre operaciones.
+    async _cashdro_start_with_retries(base_url, payment_params, method) {
+        for (let attempt = 1; attempt <= CASHDRO_NOT_QUEUED_MAX_RETRIES; attempt++) {
+            const res = await this._cashdro_request(base_url, payment_params);
+            console.log(`[Cashdro-LOG] startOperation intento ${attempt}:`, res);
+
+            if (res && res.code === 1) {
+                return res; // ✅ éxito
+            }
+
+            if (res && res.code === -2) {
+                // Máquina en estado transitorio — esperar y reintentar
+                const delay = CASHDRO_NOT_QUEUED_DELAY * attempt;
+                console.warn(`[Cashdro-LOG] Máquina no lista (intento ${attempt}/${CASHDRO_NOT_QUEUED_MAX_RETRIES}). Esperando ${delay}ms...`);
+
+                if (attempt === CASHDRO_NOT_QUEUED_MAX_RETRIES) {
+                    throw new Error(
+                        `La máquina Cashdro no está lista después de ${CASHDRO_NOT_QUEUED_MAX_RETRIES} intentos. ` +
+                        `Espera unos segundos y vuelve a intentarlo.`
+                    );
+                }
+
+                await new Promise((r) => setTimeout(r, delay));
+                continue;
+            }
+
+            // Cualquier otro error
+            throw new Error("Error en startOperation: " + JSON.stringify(res));
+        }
+    }
+
     async _cashdro_continue(res, base_url, method, payment_line) {
         const operation_id = String(res.data).trim();
         console.log("[Cashdro-LOG] ID de operación recibido:", operation_id);
@@ -104,6 +123,7 @@ export class PaymentCashdro extends PaymentInterface {
             throw new Error("El ID de operación recibido no es válido: " + operation_id);
         }
 
+        this._last_operation_id = operation_id;
         this.pos.getOrder().cashdro_operation = operation_id;
 
         // PASO 2: Acknowledge
@@ -130,12 +150,14 @@ export class PaymentCashdro extends PaymentInterface {
         payment_line.setPaymentStatus("done");
         console.log("[Cashdro-LOG] Pago finalizado con éxito en Odoo.");
 
+        // Esperar un momento antes de cerrar para que la máquina termine de procesar
+        await new Promise((r) => setTimeout(r, 1500));
         await this._cashdro_silent_finish(operation_id, base_url, method);
+        this._last_operation_id = null;
         this.pos.getOrder().cashdro_operation = false;
         return true;
     }
 
-    // finishOperation silencioso — nunca lanza error ni bloquea el flujo principal
     async _cashdro_silent_finish(op_id, base_url, method) {
         try {
             const finish_params = this._cashdro_finish_params(op_id, method);
@@ -205,8 +227,6 @@ export class PaymentCashdro extends PaymentInterface {
         };
     }
 
-    // Parsea el doble JSON de la respuesta:
-    // {"code":1, "data": "{\"operation\":{\"state\":\"F\",...}}"}
     _cashdro_parse_response(raw) {
         if (!raw) return null;
         if (raw.data && typeof raw.data === "string") {
@@ -220,7 +240,6 @@ export class PaymentCashdro extends PaymentInterface {
         return raw.data || raw;
     }
 
-    // XHR con timeout corto (5s) para operaciones silenciosas como cleanup
     _cashdro_xhr_quick(base_url, params) {
         return new Promise((resolve, reject) => {
             const query = new URLSearchParams(params).toString();
@@ -233,13 +252,12 @@ export class PaymentCashdro extends PaymentInterface {
             xhr.onload = () => {
                 try { resolve(JSON.parse(xhr.responseText)); } catch (e) { resolve(xhr.responseText); }
             };
-            xhr.onerror = () => reject(new Error("XHR error en cleanup"));
-            xhr.ontimeout = () => reject(new Error("XHR timeout en cleanup"));
+            xhr.onerror = () => reject(new Error("XHR error en operación rápida"));
+            xhr.ontimeout = () => reject(new Error("XHR timeout en operación rápida"));
             xhr.send();
         });
     }
 
-    // XHR normal con timeout largo (30s) para operaciones principales
     _cashdro_xhr(base_url, params) {
         return new Promise((resolve, reject) => {
             const query = new URLSearchParams(params).toString();
