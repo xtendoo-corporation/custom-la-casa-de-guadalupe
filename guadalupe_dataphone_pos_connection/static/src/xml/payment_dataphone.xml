@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates id="template" xml:space="preserve">
+
+    <!--
+        ================================================================
+        Template: Estado del pago con datáfono en la pantalla del POS
+        ================================================================
+        Se muestra cuando el cliente debe pasar la tarjeta por el datáfono.
+    -->
+    <t t-name="guadalupe_dataphone_pos_connection.PaymentDataphoneStatus">
+        <div class="dataphone-payment-status">
+
+            <!-- Pantalla: Esperando tarjeta -->
+            <t t-if="paymentLine.payment_status === 'waitingCard'">
+                <div class="dataphone-waiting-screen">
+                    <div class="dataphone-terminal-icon">
+                        <div class="dataphone-card-animation">
+                            <i class="fa fa-credit-card fa-3x"/>
+                        </div>
+                    </div>
+                    <h3 class="mt-3 mb-2">Acerque su tarjeta al datáfono</h3>
+                    <p class="text-muted">
+                        Terminal: <strong>Ingenico AXIUM DX4000</strong>
+                    </p>
+                    <div class="dataphone-amount-display">
+                        <span class="dataphone-amount-label">Importe a pagar</span>
+                        <span class="dataphone-amount-value">
+                            <t t-esc="env.utils.formatCurrency(paymentLine.amount)"/>
+                        </span>
+                    </div>
+                    <div class="dataphone-progress mt-3">
+                        <div class="spinner-border text-primary" role="status">
+                            <span class="visually-hidden">Esperando...</span>
+                        </div>
+                        <p class="mt-2 text-muted small">
+                            El datáfono está procesando el pago...
+                        </p>
+                    </div>
+                </div>
+            </t>
+
+            <!-- Pantalla: Pago aprobado -->
+            <t t-elif="paymentLine.payment_status === 'done'">
+                <div class="dataphone-success-screen">
+                    <div class="dataphone-check-icon">
+                        <i class="fa fa-check-circle fa-3x text-success"/>
+                    </div>
+                    <h3 class="mt-3 text-success">¡Pago aprobado!</h3>
+                    <t t-if="paymentLine.card_type">
+                        <p class="text-muted">
+                            <t t-esc="paymentLine.card_type"/>
+                            <t t-if="paymentLine.card_last_digits">
+                                ****<t t-esc="paymentLine.card_last_digits"/>
+                            </t>
+                        </p>
+                    </t>
+                    <t t-if="paymentLine.transaction_id">
+                        <p class="small text-muted">
+                            Auth: <t t-esc="paymentLine.transaction_id"/>
+                        </p>
+                    </t>
+                </div>
+            </t>
+
+            <!-- Pantalla: Reintento / Error -->
+            <t t-elif="paymentLine.payment_status === 'retry'">
+                <div class="dataphone-error-screen">
+                    <div class="dataphone-error-icon">
+                        <i class="fa fa-times-circle fa-3x text-danger"/>
+                    </div>
+                    <h3 class="mt-3 text-danger">Pago no procesado</h3>
+                    <p class="text-muted">
+                        Por favor, vuelva a intentarlo o utilice otro método de pago.
+                    </p>
+                </div>
+            </t>
+
+        </div>
+    </t>
+
+</templates>

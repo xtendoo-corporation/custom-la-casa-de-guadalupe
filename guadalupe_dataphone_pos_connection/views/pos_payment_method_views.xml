@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<odoo>
+    <!--
+        Vista del método de pago: añade los campos de configuración del
+        datáfono Ingenico AXIUM DX4000 (CaixaBank/Comercia).
+
+        Los campos se muestran/ocultan dinámicamente según el tipo de terminal
+        seleccionado ("Datáfono Ingenico AXIUM (CaixaBank)").
+    -->
+    <record id="pos_payment_method_view_form_dataphone" model="ir.ui.view">
+        <field name="name">pos.payment.method.form.dataphone</field>
+        <field name="model">pos.payment.method</field>
+        <field name="inherit_id" ref="point_of_sale.pos_payment_method_view_form"/>
+        <field name="arch" type="xml">
+            <field name="use_payment_terminal" position="after">
+
+                <!-- ── Separador visual ── -->
+                <div class="o_horizontal_separator mt-4 mb-3"
+                     invisible="use_payment_terminal != 'ingenico_axium'">
+                    <span class="fw-bold">
+                        <i class="fa fa-wifi me-2"/>
+                        Configuración del Datáfono Ingenico AXIUM DX4000 (CaixaBank)
+                    </span>
+                </div>
+
+                <!-- ── IP del terminal ── -->
+                <field
+                    name="dataphone_host"
+                    placeholder="Ej: 192.168.1.100"
+                    invisible="use_payment_terminal != 'ingenico_axium'"
+                    required="use_payment_terminal == 'ingenico_axium'"
+                />
+
+                <!-- ── Puerto TCP ── -->
+                <field
+                    name="dataphone_port"
+                    invisible="use_payment_terminal != 'ingenico_axium'"
+                />
+
+                <!-- ── ID Comercio ── -->
+                <field
+                    name="dataphone_merchant_id"
+                    placeholder="Ej: 999999999 (opcional)"
+                    invisible="use_payment_terminal != 'ingenico_axium'"
+                />
+
+                <!-- ── ID Terminal ── -->
+                <field
+                    name="dataphone_terminal_id"
+                    placeholder="Ej: 00000001 (opcional)"
+                    invisible="use_payment_terminal != 'ingenico_axium'"
+                />
+
+                <!-- ── Timeout ── -->
+                <field
+                    name="dataphone_timeout"
+                    invisible="use_payment_terminal != 'ingenico_axium'"
+                />
+
+                <!-- ── Código de moneda ── -->
+                <field
+                    name="dataphone_currency_code"
+                    invisible="use_payment_terminal != 'ingenico_axium'"
+                />
+
+                <!-- ── Botón de test de conexión ── -->
+                <button
+                    name="action_test_dataphone_connection"
+                    string="Probar Conexión con el Datáfono"
+                    type="object"
+                    icon="fa-plug"
+                    class="btn-primary mt-2"
+                    invisible="use_payment_terminal != 'ingenico_axium'"
+                />
+
+                <!-- ── Nota informativa ── -->
+                <div class="alert alert-info mt-2" role="alert"
+                     invisible="use_payment_terminal != 'ingenico_axium'">
+                    <strong>
+                        <i class="fa fa-info-circle me-1"/>
+                        Información de configuración:
+                    </strong>
+                    <ul class="mb-0 mt-1">
+                        <li>
+                            Para encontrar la <strong>IP del datáfono</strong>:
+                            en el terminal ve a <em>Menú → Configuración → Red → Información</em>
+                        </li>
+                        <li>
+                            El <strong>Puerto TCP</strong> por defecto es <code>10000</code>
+                            para terminales Ingenico AXIUM con Comercia/CaixaBank
+                        </li>
+                        <li>
+                            El <strong>ID Comercio</strong> y <strong>ID Terminal</strong>
+                            aparecen en el contrato TPV de CaixaBank (opcionales)
+                        </li>
+                        <li>
+                            El datáfono y el servidor Odoo deben estar en la
+                            <strong>misma red local</strong> o conectados por VPN
+                        </li>
+                    </ul>
+                </div>
+
+            </field>
+        </field>
+    </record>
+</odoo>

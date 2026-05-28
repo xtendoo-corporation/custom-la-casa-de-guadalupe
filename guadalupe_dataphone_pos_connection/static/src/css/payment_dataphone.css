@@ -1,0 +1,174 @@
+/* Copyright 2026 Xtendoo - Manuel Calero
+   License AGPL-3.0 or later (https://www.gnu.org/licenses/agpl). */
+
+/* ============================================================
+   Datáfono Ingenico AXIUM DX4000 — Estilos del POS
+   ============================================================ */
+
+/* ──────────────────────────────────────────────────────────────
+   Contenedor principal de la pantalla de pago
+   ────────────────────────────────────────────────────────────── */
+.dataphone-payment-status {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 2rem;
+    min-height: 280px;
+    font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+}
+
+/* ──────────────────────────────────────────────────────────────
+   Pantalla: Esperando tarjeta
+   ────────────────────────────────────────────────────────────── */
+.dataphone-waiting-screen {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: 0.5rem;
+}
+
+/* Icono del terminal con animación de pulso */
+.dataphone-terminal-icon {
+    width: 100px;
+    height: 100px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #0052cc 0%, #00a3e0 100%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 0 0 0 rgba(0, 82, 204, 0.4);
+    animation: dataphone-pulse 2s infinite;
+    color: white;
+}
+
+@keyframes dataphone-pulse {
+    0%   { box-shadow: 0 0 0 0   rgba(0, 82, 204, 0.4); }
+    70%  { box-shadow: 0 0 0 20px rgba(0, 82, 204, 0);   }
+    100% { box-shadow: 0 0 0 0   rgba(0, 82, 204, 0);    }
+}
+
+/* Animación de la tarjeta pasando por el terminal */
+.dataphone-card-animation {
+    animation: dataphone-card-swipe 1.5s ease-in-out infinite alternate;
+}
+
+@keyframes dataphone-card-swipe {
+    0%   { transform: translateY(0px);  opacity: 1;   }
+    50%  { transform: translateY(-8px); opacity: 0.7; }
+    100% { transform: translateY(0px);  opacity: 1;   }
+}
+
+/* Display del importe */
+.dataphone-amount-display {
+    background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+    border: 2px solid #dee2e6;
+    border-radius: 12px;
+    padding: 1rem 2rem;
+    margin-top: 0.5rem;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.25rem;
+}
+
+.dataphone-amount-label {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #6c757d;
+    font-weight: 600;
+}
+
+.dataphone-amount-value {
+    font-size: 2rem;
+    font-weight: 800;
+    color: #0052cc;
+    letter-spacing: -0.02em;
+}
+
+/* Indicador de progreso */
+.dataphone-progress {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+/* ──────────────────────────────────────────────────────────────
+   Pantalla: Pago aprobado
+   ────────────────────────────────────────────────────────────── */
+.dataphone-success-screen {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: 0.25rem;
+    animation: dataphone-fade-in 0.4s ease-out;
+}
+
+.dataphone-check-icon {
+    width: 80px;
+    height: 80px;
+    border-radius: 50%;
+    background: #d4edda;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    animation: dataphone-scale-in 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@keyframes dataphone-scale-in {
+    0%   { transform: scale(0); opacity: 0; }
+    100% { transform: scale(1); opacity: 1; }
+}
+
+/* ──────────────────────────────────────────────────────────────
+   Pantalla: Error / Reintento
+   ────────────────────────────────────────────────────────────── */
+.dataphone-error-screen {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: 0.5rem;
+    animation: dataphone-fade-in 0.3s ease-out;
+}
+
+.dataphone-error-icon {
+    width: 80px;
+    height: 80px;
+    border-radius: 50%;
+    background: #f8d7da;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+/* ──────────────────────────────────────────────────────────────
+   Animación global de aparición
+   ────────────────────────────────────────────────────────────── */
+@keyframes dataphone-fade-in {
+    from { opacity: 0; transform: translateY(10px); }
+    to   { opacity: 1; transform: translateY(0);    }
+}
+
+/* ──────────────────────────────────────────────────────────────
+   Responsive: pantallas pequeñas (tablets de TPV)
+   ────────────────────────────────────────────────────────────── */
+@media (max-width: 768px) {
+    .dataphone-amount-value {
+        font-size: 1.5rem;
+    }
+
+    .dataphone-terminal-icon {
+        width: 80px;
+        height: 80px;
+    }
+
+    .dataphone-payment-status {
+        padding: 1rem;
+        min-height: 220px;
+    }
+}
