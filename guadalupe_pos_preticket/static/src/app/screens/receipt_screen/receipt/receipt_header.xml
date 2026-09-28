@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates id="template" xml:space="preserve">
+    <!--
+        xtendoo_pos_receipt (module compartido) siempre imprime
+        "FACTURA SIMPLIFICADA:" en la cabecera del ticket, sea cual sea el
+        estado del pedido. Para el preticket (pedido aún no cobrado) eso es
+        incorrecto: no es un documento fiscal. Aquí solo cambiamos la
+        etiqueta cuando el pedido no está finalizado (order.finalized es
+        false mientras el pedido sigue en estado "draft", es decir, antes de
+        cobrar), sin tocar el ticket definitivo.
+    -->
+    <t t-name="guadalupe_pos_preticket.ReceiptHeader" t-inherit="point_of_sale.ReceiptHeader" t-inherit-mode="extension">
+        <xpath expr="//strong[contains(text(), 'FACTURA SIMPLIFICADA')]/parent::div" position="replace">
+            <div style="margin-bottom: 2px;">
+                <strong>
+                    <t t-if="props.order.finalized">FACTURA SIMPLIFICADA:</t>
+                    <t t-else="">TICKET</t>
+                </strong>
+                <t t-if="props.order.finalized"> <t t-esc="props.order.name || ''"/></t>
+            </div>
+        </xpath>
+    </t>
+</templates>

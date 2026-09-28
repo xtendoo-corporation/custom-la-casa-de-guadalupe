@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates id="template" xml:space="preserve">
+    <t t-name="guadalupe_pos_preticket.ControlButtons" t-inherit="point_of_sale.ControlButtons" t-inherit-mode="extension">
+        <xpath expr="//t[@t-if='props.showRemainingButtons']/div/button[hasclass('o_pricelist_button')]" position="before">
+            <button t-if="this.pos.cashier._role != 'minimal'"
+                t-att-class="buttonClass"
+                t-att-disabled="!currentOrder?.getOrderlines()?.length"
+                t-on-click="clickPrintPreticket">
+                <i class="fa fa-print me-1" role="img" aria-label="Preticket" title="Preticket" />Preticket
+            </button>
+        </xpath>
+    </t>
+</templates>
